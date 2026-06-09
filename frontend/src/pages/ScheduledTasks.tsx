@@ -335,6 +335,7 @@ export default function ScheduledTasks() {
             <Select
               options={[
                 { value: 'tempmail_lol', label: 'TempMail' },
+                { value: 'alimail', label: '阿里企业邮箱' },
                 { value: 'moemail', label: 'MoeMail (sall.cc)' },
                 { value: 'freemail', label: 'Freemail (自建)' },
                 { value: 'luckmail', label: 'LuckMail' },

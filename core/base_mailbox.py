@@ -83,6 +83,10 @@ class BaseMailbox(ABC):
         """等待并返回验证码，code_pattern 为自定义正则（默认匹配6位数字）"""
         ...
 
+    def cleanup(self, account: MailboxAccount = None) -> None:
+        """注册完成后清理资源（如删除临时用户）。默认空操作，子类可按需覆写。"""
+        pass
+
     def _safe_extract(self, text: str, pattern: str = None) -> Optional[str]:
         """通用验证码提取逻辑：若有捕获组则返回 group(1)，否则返回 group(0)"""
         import re
@@ -209,6 +213,315 @@ class BaseMailbox(ABC):
         text = re.sub(r"\s+", " ", text).strip()
         return text
 
+
+class AliMailMailbox(BaseMailbox):
+    """
+    阿里企业邮箱（AliMail Enterprise）集成
+    通过阿里邮箱开放平台 API 创建用户并轮询收件箱验证码。
+    需要在邮箱管理后台创建应用获取 appId / secret，并授权相关权限。
+    """
+
+    TOKEN_URL = "https://alimail-cn.aliyuncs.com/oauth2/v2.0/token"
+    API_BASE = "https://alimail-cn.aliyuncs.com"
+
+    def __init__(
+        self,
+        app_id: str,
+        app_secret: str,
+        domain: str,
+        proxy: str = None,
+    ):
+        self.app_id = app_id or ""
+        self.app_secret = app_secret or ""
+        self.domain = (domain or "").strip().lstrip("@")
+        # 阿里邮箱 API 为国内服务，不走代理，直连更稳定
+        self.proxy = None
+        self._access_token: Optional[str] = None
+        self._token_expires_at: float = 0
+
+    def _ensure_config(self) -> None:
+        if not self.app_id or not self.app_secret or not self.domain:
+            raise RuntimeError(
+                "阿里企业邮箱未配置完整：请设置 alimail_app_id、alimail_app_secret、alimail_domain"
+            )
+
+    def _get_access_token(self) -> str:
+        """使用 appId/secret 获取 OAuth2 access_token（带缓存）"""
+        import requests as _req
+
+        now = time.time()
+        if self._access_token and now < self._token_expires_at - 60:
+            return self._access_token
+
+        resp = _req.post(
+            self.TOKEN_URL,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={
+                "grant_type": "client_credentials",
+                "client_id": self.app_id,
+                "client_secret": self.app_secret,
+            },
+            proxies=self.proxy,
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"阿里邮箱获取 Token 失败: {resp.status_code} {resp.text[:300]}")
+
+        data = resp.json()
+        token = data.get("access_token")
+        if not token:
+            raise RuntimeError(f"阿里邮箱获取 Token 失败: {data}")
+
+        expires_in = int(data.get("expires_in", 3600))
+        self._access_token = token
+        self._token_expires_at = now + expires_in
+        self._log(f"[AliMail] 获取 access_token 成功 (有效期 {expires_in}s)")
+        return token
+
+    def _auth_headers(self) -> dict:
+        token = self._get_access_token()
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"bearer {token}",
+        }
+
+    def _gen_prefix(self) -> str:
+        length = random.randint(8, 12)
+        chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+        return "".join(random.choice(chars) for _ in range(length))
+
+    def _create_user(self, email: str, password: str, display_name: str = "") -> None:
+        """通过 API 在域名下创建邮箱用户"""
+        import requests as _req
+
+        url = f"{self.API_BASE}/v2/users"
+        body = {
+            "name": email,
+            "email": email,
+            "password": password,
+        }
+        resp = _req.post(
+            url,
+            json=body,
+            headers=self._auth_headers(),
+            proxies=self.proxy,
+            timeout=15,
+        )
+        if resp.status_code in (200, 201):
+            self._log(f"[AliMail] 创建用户成功: {email}")
+            return
+
+        # 如果用户已存在（通常返回 409 或错误码中包含 conflict/exist），视为成功
+        text = resp.text
+        if resp.status_code == 409:
+            self._log(f"[AliMail] 用户已存在，跳过创建: {email}")
+            return
+        try:
+            err = resp.json()
+            code = str(err.get("detailErrorCode") or "").lower()
+            if "exist" in code or "conflict" in code or "duplicate" in code:
+                self._log(f"[AliMail] 用户已存在，跳过创建: {email}")
+                return
+        except Exception:
+            pass
+
+        raise RuntimeError(f"阿里邮箱创建用户失败: {resp.status_code} {text[:300]}")
+
+    def get_email(self) -> MailboxAccount:
+        self._ensure_config()
+        prefix = self._gen_prefix()
+        email = f"{prefix}@{self.domain}"
+        # 生成随机密码用于创建用户（16位）
+        import string
+        pw_chars = string.ascii_letters + string.digits + "!@#$"
+        password = "".join(random.choice(pw_chars) for _ in range(16))
+
+        self._create_user(email, password, display_name=prefix)
+        self._log(f"[AliMail] 生成邮箱: {email}")
+        account = MailboxAccount(email=email, account_id=email)
+        self._created_account = account
+        # 等待欢迎邮件到达，避免后续轮询时误将欢迎邮件当作新邮件
+        self._wait_for_welcome_email(email)
+        return account
+
+    def _wait_for_welcome_email(self, email: str, timeout: int = 10) -> None:
+        """创建用户后等待欢迎邮件到达收件箱"""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                msgs = self._list_messages(email, size=5)
+                if msgs:
+                    self._log(f"[AliMail] 收件箱已就绪 ({len(msgs)} 封邮件)")
+                    return
+            except Exception:
+                pass
+            time.sleep(1)
+        self._log(f"[AliMail] 等待欢迎邮件超时，继续执行")
+
+    # 阿里邮箱文件夹: inbox=2, spam=3, 验证邮件通常在这两个文件夹
+    SEARCH_FOLDER_IDS = ["2", "3"]
+
+    def _list_messages(self, email: str, size: int = 10) -> list:
+        """获取收件箱和垃圾邮件中的邮件列表"""
+        import requests as _req
+
+        all_messages = []
+        seen_ids = set()
+
+        for fid in self.SEARCH_FOLDER_IDS:
+            url = f"{self.API_BASE}/v2/users/{email}/mailFolders/{fid}/messages"
+            params = {"size": str(size), "orderby": "DES"}
+            try:
+                resp = _req.get(
+                    url,
+                    params=params,
+                    headers=self._auth_headers(),
+                    proxies=self.proxy,
+                    timeout=15,
+                )
+                if resp.status_code != 200:
+                    if resp.status_code == 404 and "user.notFound" in resp.text:
+                        self._log(f"[AliMail] 用户不存在: {email}")
+                        return []
+                    continue
+                data = resp.json()
+                for msg in data.get("messages") or []:
+                    mid = str(msg.get("id") or msg.get("mailId") or "")
+                    if mid and mid not in seen_ids:
+                        seen_ids.add(mid)
+                        all_messages.append(msg)
+            except Exception as e:
+                self._log(f"[AliMail] 文件夹 {fid} 查询异常: {e}")
+                continue
+
+        return all_messages
+
+    def get_current_ids(self, account: MailboxAccount) -> set:
+        email = account.account_id or account.email
+        messages = self._list_messages(email)
+        ids = set()
+        for msg in messages:
+            mid = msg.get("id") or msg.get("mailId")
+            if mid:
+                ids.add(str(mid))
+        return ids
+
+    def _get_message_body(self, email: str, message_id: str) -> str:
+        """通过 $select=body 获取单封邮件的完整 HTML 正文"""
+        import requests as _req, re
+
+        url = f"{self.API_BASE}/v2/users/{email}/messages/{message_id}"
+        params = {"$select": "body"}
+        try:
+            resp = _req.get(
+                url,
+                params=params,
+                headers=self._auth_headers(),
+                proxies=self.proxy,
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                return ""
+            data = resp.json()
+            msg = data.get("message") or data
+            body = msg.get("body") or {}
+            html = body.get("bodyHtml") or body.get("content") or ""
+            # 去除 HTML 标签提取纯文本
+            text = re.sub(r'<[^>]+>', ' ', html)
+            text = re.sub(r'\s+', ' ', text).strip()
+            return text
+        except Exception as e:
+            self._log(f"[AliMail] 获取邮件正文失败: {e}")
+            return ""
+
+    def wait_for_code(
+        self,
+        account: MailboxAccount,
+        keyword: str = "",
+        timeout: int = 120,
+        before_ids: set = None,
+        code_pattern: str = None,
+        **kwargs,
+    ) -> str:
+        email = account.account_id or account.email
+        seen = set(before_ids or [])
+        _poll_count = [0]
+
+        def poll_once() -> Optional[str]:
+            _poll_count[0] += 1
+            messages = self._list_messages(email)
+            new_count = 0
+            for msg in messages:
+                mid = str(msg.get("id") or msg.get("mailId") or "")
+                if not mid or mid in seen:
+                    continue
+                seen.add(mid)
+                new_count += 1
+
+                subj = str(msg.get("subject") or "")
+                folder = msg.get("folderId", "?")
+                self._log(f"[AliMail] 新邮件: folder={folder} subj={subj[:60]}")
+
+                # 先用 summary 快速检查 keyword
+                summary = str(msg.get("summary") or "")
+                quick_content = f"{subj} {summary}"
+                if keyword and keyword.lower() not in quick_content.lower():
+                    self._log(f"[AliMail] 跳过: keyword '{keyword}' 不匹配")
+                    continue
+
+                # keyword 匹配，获取完整正文提取验证码
+                self._log(f"[AliMail] keyword 匹配，获取完整正文...")
+                full_text = self._get_message_body(email, mid)
+                content = f"{subj} {full_text} {summary}"
+
+                code = self._safe_extract(content, code_pattern)
+                if code:
+                    self._log(f"[AliMail] 命中验证码: {code}")
+                    return code
+                else:
+                    self._log(f"[AliMail] 未提取到验证码, content_len={len(content)}")
+
+            if _poll_count[0] % 6 == 1:  # 每 30 秒报告一次状态
+                self._log(f"[AliMail] 轮询 #{_poll_count[0]}: {len(messages)} 封邮件, {new_count} 封新邮件")
+            return None
+
+        return self._run_polling_wait(
+            timeout=timeout,
+            poll_interval=5,
+            poll_once=poll_once,
+        )
+
+    def _delete_user(self, email: str) -> None:
+        """通过 API 删除指定邮箱用户"""
+        import requests as _req
+
+        url = f"{self.API_BASE}/v2/users/{email}"
+        try:
+            resp = _req.delete(
+                url,
+                headers=self._auth_headers(),
+                proxies=self.proxy,
+                timeout=15,
+            )
+            if resp.status_code in (200, 204):
+                self._log(f"[AliMail] 删除用户成功: {email}")
+            elif resp.status_code == 404:
+                self._log(f"[AliMail] 用户不存在，无需删除: {email}")
+            else:
+                self._log(f"[AliMail] 删除用户失败: {resp.status_code} {resp.text[:200]}")
+        except Exception as e:
+            self._log(f"[AliMail] 删除用户异常: {email}, 错误: {e}")
+
+    def cleanup(self, account: MailboxAccount = None) -> None:
+        """注册完成后自动删除创建的邮箱用户"""
+        target = account or getattr(self, "_created_account", None)
+        if target is None:
+            return
+        email = target.account_id or target.email
+        if email:
+            self._delete_user(email)
+
+
 def create_mailbox(
     provider: str, extra: dict = None, proxy: str = None
 ) -> "BaseMailbox":
@@ -282,6 +595,13 @@ def create_mailbox(
             random_subdomain=extra.get("cfworker_random_subdomain", False),
             fingerprint=extra.get("cfworker_fingerprint", ""),
             custom_auth=extra.get("cfworker_custom_auth", ""),
+            proxy=proxy,
+        )
+    elif provider == "alimail":
+        return AliMailMailbox(
+            app_id=extra.get("alimail_app_id", ""),
+            app_secret=extra.get("alimail_app_secret", ""),
+            domain=extra.get("alimail_domain", ""),
             proxy=proxy,
         )
     elif provider == "luckmail":

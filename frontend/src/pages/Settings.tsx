@@ -19,6 +19,7 @@ import { apiFetch } from '@/lib/utils'
 const SELECT_FIELDS: Record<string, { label: string; value: string }[]> = {
   mail_provider: [
     { label: 'LuckMail（订单接码 / 已购邮箱）', value: 'luckmail' },
+    { label: '阿里企业邮箱（AliMail）', value: 'alimail' },
     { label: 'Laoudo（固定邮箱）', value: 'laoudo' },
     { label: 'TempMail.lol（自动生成）', value: 'tempmail_lol' },
     { label: 'SkyMail（CloudMail 接口）', value: 'skymail' },
@@ -178,6 +179,16 @@ const TAB_ITEMS = [
           { key: 'cfworker_subdomain', label: '固定子域名', placeholder: 'mail / pool-a' },
           { key: 'cfworker_random_subdomain', label: '随机子域名', type: 'boolean' },
           { key: 'cfworker_fingerprint', label: 'Fingerprint', placeholder: '6703363b...' },
+        ],
+      },
+      {
+        title: '阿里企业邮箱',
+        provider: 'alimail',
+        desc: '通过阿里邮箱开放平台 API 创建用户并轮询收件箱验证码',
+        fields: [
+          { key: 'alimail_app_id', label: '应用 ID (App ID)', placeholder: 'yvzcBSzoJ7gNt6U0' },
+          { key: 'alimail_app_secret', label: '应用密钥 (Secret)', secret: true },
+          { key: 'alimail_domain', label: '邮箱域名', placeholder: 'hankol.com.cn' },
         ],
       },
       {

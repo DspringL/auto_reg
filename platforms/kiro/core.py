@@ -780,6 +780,7 @@ class KiroRegister:
             raise RuntimeError(
                 f"桌面端 token 交换失败: {json.dumps(response, ensure_ascii=False)[:300]}"
             )
+        self.log(f"桌面端 token 交换成功: keys={list(response.keys())}")
         return response
 
     def _handle_desktop_auth_page(self, page: Page, email: str = "", pwd: str = ""):
@@ -902,6 +903,7 @@ class KiroRegister:
                 code=callback["code"],
                 code_verifier=code_verifier,
             )
+            self.log(f"桌面端 token 原始响应: keys={list(desktop_token.keys())}, refreshToken={'有' if desktop_token.get('refreshToken') else '无'}")
 
             return {
                 "accessToken": desktop_token.get("accessToken", ""),
@@ -1175,10 +1177,11 @@ class KiroRegister:
             try:
                 desktop_tokens = self._complete_desktop_idc_flow(email=email, pwd=pwd)
                 self._captured_tokens.update(desktop_tokens)
-                self.log("桌面端 Builder ID Token 已补抓完成")
+                self.log(f"桌面端 Builder ID Token 已补抓完成: keys={list(desktop_tokens.keys())}, refreshToken={'有' if desktop_tokens.get('refreshToken') else '无'}")
             except Exception as desktop_error:
                 self.log(f"⚠️ 桌面端 Builder ID Token 补抓失败: {desktop_error}")
 
+            self.log(f"最终 tokens: accessToken={'有' if self._captured_tokens.get('accessToken') else '无'}, refreshToken={'有' if self._captured_tokens.get('refreshToken') else '无'}, clientId={'有' if self._captured_tokens.get('clientId') else '无'}")
             return True, {
                 "email": email,
                 "password": pwd,

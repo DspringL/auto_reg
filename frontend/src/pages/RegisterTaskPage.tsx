@@ -85,6 +85,9 @@ export default function RegisterTaskPage() {
         luckmail_api_key: cfg.luckmail_api_key || '',
         luckmail_email_type: cfg.luckmail_email_type || '',
         luckmail_domain: cfg.luckmail_domain || '',
+        alimail_app_id: cfg.alimail_app_id || '',
+        alimail_app_secret: cfg.alimail_app_secret || '',
+        alimail_domain: cfg.alimail_domain || '',
         // 自动上传配置
         cpa_api_url: cfg.cpa_api_url || '',
         cpa_api_key: cfg.cpa_api_key || '',
@@ -293,6 +296,7 @@ export default function RegisterTaskPage() {
             <Select
               options={[
                 { value: 'luckmail', label: 'LuckMail' },
+                { value: 'alimail', label: '阿里企业邮箱' },
                 { value: 'moemail', label: 'MoeMail (sall.cc)' },
                 { value: 'tempmail_lol', label: 'TempMail.lol' },
                 { value: 'skymail', label: 'SkyMail (CloudMail)' },

@@ -101,6 +101,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
 
     with _tasks_lock:
         _tasks[task_id]["status"] = "running"
+        _tasks[task_id]["control"] = {"stop_requested": False}
     success = 0
     errors = []
     start_gate_lock = threading.Lock()
@@ -121,6 +122,12 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
 
         def _do_one(i: int):
             nonlocal next_start_time
+            # 检查是否已请求停止
+            with _tasks_lock:
+                if _tasks.get(task_id, {}).get("control", {}).get("stop_requested"):
+                    _log(task_id, f"第 {i+1} 个账号: 任务已停止，跳过")
+                    return "stopped"
+            _mailbox = None
             try:
                 from core.proxy_pool import proxy_pool
 
@@ -202,6 +209,12 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 _log(task_id, f"[FAIL] 注册失败: {e}")
                 _save_task_log(req.platform, req.email or "", "failed", error=str(e))
                 return str(e)
+            finally:
+                if _mailbox is not None:
+                    try:
+                        _mailbox.cleanup()
+                    except Exception as cleanup_err:
+                        _log(task_id, f"[WARN] 邮箱清理失败: {cleanup_err}")
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
         max_workers = min(req.concurrency, req.count, 5)
@@ -225,11 +238,21 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
             _tasks[task_id]["error"] = str(e)
         return
 
+    # 检查是否被停止
     with _tasks_lock:
-        _tasks[task_id]["status"] = "done"
-        _tasks[task_id]["success"] = success
-        _tasks[task_id]["errors"] = errors
-    _log(task_id, f"完成: 成功 {success} 个, 失败 {len(errors)} 个")
+        was_stopped = _tasks.get(task_id, {}).get("control", {}).get("stop_requested", False)
+    if was_stopped:
+        with _tasks_lock:
+            _tasks[task_id]["status"] = "stopped"
+            _tasks[task_id]["success"] = success
+            _tasks[task_id]["errors"] = errors
+        _log(task_id, f"任务已停止: 成功 {success} 个, 失败 {len(errors)} 个")
+    else:
+        with _tasks_lock:
+            _tasks[task_id]["status"] = "done"
+            _tasks[task_id]["success"] = success
+            _tasks[task_id]["errors"] = errors
+        _log(task_id, f"完成: 成功 {success} 个, 失败 {len(errors)} 个")
     _cleanup_old_tasks()
 
 
@@ -492,6 +515,19 @@ def get_task(task_id: str):
         if task_id not in _tasks:
             raise HTTPException(404, "任务不存在")
         return _tasks[task_id]
+
+
+@router.post("/{task_id}/stop")
+def stop_task(task_id: str):
+    with _tasks_lock:
+        if task_id not in _tasks:
+            raise HTTPException(404, "任务不存在")
+        task = _tasks[task_id]
+        if task.get("status") != "running":
+            raise HTTPException(400, "任务未在运行")
+        task.setdefault("control", {})["stop_requested"] = True
+        _log(task_id, "[STOP] 用户请求停止任务，等待当前线程完成...")
+    return {"ok": True, "message": "已发送停止请求"}
 
 
 @router.get("")

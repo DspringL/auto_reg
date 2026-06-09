@@ -35,6 +35,11 @@ class AccountModel(SQLModel, table=True):
     def set_extra(self, d: dict):
         self.extra_json = json.dumps(d, ensure_ascii=False)
 
+    @property
+    def extra(self) -> dict:
+        """兼容 base_platform.Account 的 extra 属性"""
+        return self.get_extra()
+
 
 class TaskLog(SQLModel, table=True):
     __tablename__ = "task_logs"
