@@ -134,7 +134,8 @@ class _DesktopAuthCallbackServer:
                 return
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, daemon=True)
         self._thread.start()
 
     @property
@@ -209,7 +210,8 @@ class KiroRegister:
 
         if ua_tmpl["name"] == "mac_chrome":
             os_minor = random.choice([14, 15, 16])
-            user_agent = ua_tmpl["template"].format(ver=chrome_ver, minor=os_minor)
+            user_agent = ua_tmpl["template"].format(
+                ver=chrome_ver, minor=os_minor)
         else:
             user_agent = ua_tmpl["template"].format(ver=chrome_ver)
 
@@ -254,7 +256,8 @@ class KiroRegister:
             color_scheme=random.choice(["light", "dark"]),
             reduced_motion=random.choice(["reduce", "no-preference"]),
         )
-        self.context.set_extra_http_headers({"Accept-Language": f"{locale},en;q=0.9"})
+        self.context.set_extra_http_headers(
+            {"Accept-Language": f"{locale},en;q=0.9"})
 
         # 拦截 Kiro 登录成功相关的请求/响应，提取 Token
         self.context.on("request", self._on_request)
@@ -318,7 +321,8 @@ class KiroRegister:
                 try:
                     text = response.text()
                     entry["text"] = text[:2000]
-                    self._captured_tokens.update(self._extract_tokens_from_object(text))
+                    self._captured_tokens.update(
+                        self._extract_tokens_from_object(text))
                 except Exception:
                     text = None
 
@@ -610,7 +614,8 @@ class KiroRegister:
         ]
 
         while time.time() < deadline:
-            field = self._get_first_visible_locator(self._otp_input_candidates(page))
+            field = self._get_first_visible_locator(
+                self._otp_input_candidates(page))
             if field:
                 return True, "", field
 
@@ -718,7 +723,8 @@ class KiroRegister:
 
         if not self._captured_tokens.get("sessionToken"):
             try:
-                ss = page.evaluate("() => JSON.stringify(window.sessionStorage)")
+                ss = page.evaluate(
+                    "() => JSON.stringify(window.sessionStorage)")
                 self._captured_tokens.update(
                     self._extract_tokens_from_object(json.loads(ss))
                 )
@@ -866,7 +872,8 @@ class KiroRegister:
 
             self.log("开始桌面端授权跳转 ...")
             auth_page = self.context.new_page()
-            auth_page.goto(authorize_url, wait_until="domcontentloaded", timeout=60000)
+            auth_page.goto(
+                authorize_url, wait_until="domcontentloaded", timeout=60000)
 
             started = time.time()
             while time.time() - started < 120:
@@ -903,7 +910,8 @@ class KiroRegister:
                 code=callback["code"],
                 code_verifier=code_verifier,
             )
-            self.log(f"桌面端 token 原始响应: keys={list(desktop_token.keys())}, refreshToken={'有' if desktop_token.get('refreshToken') else '无'}")
+            self.log(
+                f"桌面端 token 原始响应: keys={list(desktop_token.keys())}, refreshToken={'有' if desktop_token.get('refreshToken') else '无'}")
 
             return {
                 "accessToken": desktop_token.get("accessToken", ""),
@@ -1104,7 +1112,8 @@ class KiroRegister:
                 err_text = ""
                 # try to extract some error
                 if page.locator(".awsui-alert-content").count() > 0:
-                    err_text = page.locator(".awsui-alert-content").text_content()
+                    err_text = page.locator(
+                        ".awsui-alert-content").text_content()
                 self.log(f"未回到 Kiro，当前 URL: {page.url}")
                 try:
                     self.log(f"当前页面标题: {page.title()}")
@@ -1155,7 +1164,8 @@ class KiroRegister:
                         if "kiro.dev" in c.get("domain", "")
                         or "aws" in c.get("domain", "")
                     ]
-                    self.log(f"Cookies: {json.dumps(cookies[:20], ensure_ascii=False)}")
+                    self.log(
+                        f"Cookies: {json.dumps(cookies[:20], ensure_ascii=False)}")
                 except Exception:
                     pass
                 if self._network_debug:
@@ -1175,13 +1185,16 @@ class KiroRegister:
                 }
 
             try:
-                desktop_tokens = self._complete_desktop_idc_flow(email=email, pwd=pwd)
+                desktop_tokens = self._complete_desktop_idc_flow(
+                    email=email, pwd=pwd)
                 self._captured_tokens.update(desktop_tokens)
-                self.log(f"桌面端 Builder ID Token 已补抓完成: keys={list(desktop_tokens.keys())}, refreshToken={'有' if desktop_tokens.get('refreshToken') else '无'}")
+                self.log(
+                    f"桌面端 Builder ID Token 已补抓完成: keys={list(desktop_tokens.keys())}, refreshToken={'有' if desktop_tokens.get('refreshToken') else '无'}")
             except Exception as desktop_error:
                 self.log(f"⚠️ 桌面端 Builder ID Token 补抓失败: {desktop_error}")
 
-            self.log(f"最终 tokens: accessToken={'有' if self._captured_tokens.get('accessToken') else '无'}, refreshToken={'有' if self._captured_tokens.get('refreshToken') else '无'}, clientId={'有' if self._captured_tokens.get('clientId') else '无'}")
+            self.log(
+                f"最终 tokens: accessToken={'有' if self._captured_tokens.get('accessToken') else '无'}, refreshToken={'有' if self._captured_tokens.get('refreshToken') else '无'}, clientId={'有' if self._captured_tokens.get('clientId') else '无'}")
             return True, {
                 "email": email,
                 "password": pwd,

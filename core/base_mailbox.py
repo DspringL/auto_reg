@@ -117,7 +117,9 @@ class BaseMailbox(ABC):
 
     def _decode_raw_content(self, raw: str) -> str:
         """解析邮件原始文本 (借鉴自 Fugle)，处理 Quoted-Printable 和 HTML 实体"""
-        import quopri, html, re
+        import quopri
+        import html
+        import re
 
         text = str(raw or "")
         if not text:
@@ -135,7 +137,8 @@ class BaseMailbox(ABC):
             pass
         # 清除 HTML 标签并反转义
         text = html.unescape(text)
-        text = re.sub(r"(?im)^content-(?:type|transfer-encoding):.*$", " ", text)
+        text = re.sub(
+            r"(?im)^content-(?:type|transfer-encoding):.*$", " ", text)
         text = re.sub(r"(?im)^--+[_=\w.-]+$", " ", text)
         text = re.sub(r"(?i)----=_part_[\w.]+", " ", text)
         text = re.sub(r"<[^>]+>", " ", text)
@@ -146,6 +149,7 @@ class BaseMailbox(ABC):
     def get_current_ids(self, account: MailboxAccount) -> set:
         """返回当前邮件 ID 集合（用于过滤旧邮件）"""
         ...
+
     def _yyds_safe_extract(self, text: str, pattern: str = None) -> Optional[str]:
         """通用验证码提取逻辑：若有捕获组则返回 group(1)，否则返回 group(0)"""
         import re
@@ -184,12 +188,14 @@ class BaseMailbox(ABC):
 
     def _yyds_decode_raw_content(self, raw: str) -> str:
         """解析邮件原始文本 (借鉴自 Fugle)，处理 Quoted-Printable 和 HTML 实体"""
-        import quopri, html, re
+        import quopri
+        import html
+        import re
 
         text = str(raw or "")
         if not text:
             return ""
-            
+
         # [修复点 4]：只有在明确包含常见邮件 Header 时，才进行 \r\n\r\n 切分。
         # 否则会误删 MaliAPI 等直接返回的已解析 JSON 正文内容（遇到普通的正文换行就错误截断了）
         if re.search(r"(?im)^(?:Return-Path|Received|Date|From|To|Subject|Content-Type):", text):
@@ -197,7 +203,7 @@ class BaseMailbox(ABC):
                 text = text.split("\r\n\r\n", 1)[1]
             elif "\n\n" in text:
                 text = text.split("\n\n", 1)[1]
-                
+
         try:
             # 处理 Quoted-Printable
             decoded_bytes = quopri.decodestring(text)
@@ -206,7 +212,8 @@ class BaseMailbox(ABC):
             pass
         # 清除 HTML 标签并反转义
         text = html.unescape(text)
-        text = re.sub(r"(?im)^content-(?:type|transfer-encoding):.*$", " ", text)
+        text = re.sub(
+            r"(?im)^content-(?:type|transfer-encoding):.*$", " ", text)
         text = re.sub(r"(?im)^--+[_=\w.-]+$", " ", text)
         text = re.sub(r"(?i)----=_part_[\w.]+", " ", text)
         text = re.sub(r"<[^>]+>", " ", text)
@@ -265,7 +272,8 @@ class AliMailMailbox(BaseMailbox):
             timeout=15,
         )
         if resp.status_code != 200:
-            raise RuntimeError(f"阿里邮箱获取 Token 失败: {resp.status_code} {resp.text[:300]}")
+            raise RuntimeError(
+                f"阿里邮箱获取 Token 失败: {resp.status_code} {resp.text[:300]}")
 
         data = resp.json()
         token = data.get("access_token")
@@ -408,7 +416,8 @@ class AliMailMailbox(BaseMailbox):
 
     def _get_message_body(self, email: str, message_id: str) -> str:
         """通过 $select=body 获取单封邮件的完整 HTML 正文"""
-        import requests as _req, re
+        import requests as _req
+        import re
 
         url = f"{self.API_BASE}/v2/users/{email}/messages/{message_id}"
         params = {"$select": "body"}
@@ -482,7 +491,8 @@ class AliMailMailbox(BaseMailbox):
                     self._log(f"[AliMail] 未提取到验证码, content_len={len(content)}")
 
             if _poll_count[0] % 6 == 1:  # 每 30 秒报告一次状态
-                self._log(f"[AliMail] 轮询 #{_poll_count[0]}: {len(messages)} 封邮件, {new_count} 封新邮件")
+                self._log(
+                    f"[AliMail] 轮询 #{_poll_count[0]}: {len(messages)} 封邮件, {new_count} 封新邮件")
             return None
 
         return self._run_polling_wait(
@@ -508,7 +518,8 @@ class AliMailMailbox(BaseMailbox):
             elif resp.status_code == 404:
                 self._log(f"[AliMail] 用户不存在，无需删除: {email}")
             else:
-                self._log(f"[AliMail] 删除用户失败: {resp.status_code} {resp.text[:200]}")
+                self._log(
+                    f"[AliMail] 删除用户失败: {resp.status_code} {resp.text[:200]}")
         except Exception as e:
             self._log(f"[AliMail] 删除用户异常: {email}, 错误: {e}")
 
@@ -538,7 +549,8 @@ def create_mailbox(
         )
     elif provider == "duckmail":
         return DuckMailMailbox(
-            api_url=(extra.get("duckmail_api_url") or "https://www.duckmail.sbs"),
+            api_url=(extra.get("duckmail_api_url")
+                     or "https://www.duckmail.sbs"),
             provider_url=(
                 extra.get("duckmail_provider_url") or "https://api.duckmail.sbs"
             ),
@@ -571,7 +583,8 @@ def create_mailbox(
         )
     elif provider == "gptmail":
         return GPTMailMailbox(
-            api_url=extra.get("gptmail_base_url", "https://mail.chatgpt.org.uk"),
+            api_url=extra.get("gptmail_base_url",
+                              "https://mail.chatgpt.org.uk"),
             api_key=extra.get("gptmail_api_key", ""),
             domain=extra.get("gptmail_domain", ""),
             proxy=proxy,
@@ -606,7 +619,8 @@ def create_mailbox(
         )
     elif provider == "luckmail":
         return LuckMailMailbox(
-            base_url=extra.get("luckmail_base_url") or "https://mails.luckyous.com/",
+            base_url=extra.get(
+                "luckmail_base_url") or "https://mails.luckyous.com/",
             api_key=extra.get("luckmail_api_key", ""),
             project_code=extra.get("luckmail_project_code", ""),
             email_type=extra.get("luckmail_email_type", ""),
@@ -707,7 +721,8 @@ class LaoudoMailbox(BaseMailbox):
                         text = (
                             str(mail.get("subject", ""))
                             + " "
-                            + str(mail.get("content") or mail.get("html") or "")
+                            + str(mail.get("content")
+                                  or mail.get("html") or "")
                         )
                         if keyword and keyword.lower() not in text.lower():
                             continue
@@ -781,7 +796,8 @@ class AitreMailbox(BaseMailbox):
                         if mid in seen:
                             continue
                         seen.add(mid)
-                        text = mail.get("preview", "") + mail.get("content", "")
+                        text = mail.get("preview", "") + \
+                            mail.get("content", "")
                         if keyword and keyword.lower() not in text.lower():
                             continue
                         code = self._safe_extract(text, code_pattern)
@@ -879,7 +895,7 @@ class TempMailLolMailbox(BaseMailbox):
                     # 修复：如果 API 返回空 ID，避免 "" 被 seen 拦截导致死循环
                     if mid and mid in seen:
                         continue
-                    
+
                     text = (
                         str(mail.get("subject", ""))
                         + " "
@@ -891,7 +907,8 @@ class TempMailLolMailbox(BaseMailbox):
                         continue
                     code = self._safe_extract(text, code_pattern)
                     if code:
-                        self._log(f"[TempMailLol] 邮件 {mid or '(空ID)'} 提取验证码={code}, 排除={code in exclude_codes}")
+                        self._log(
+                            f"[TempMailLol] 邮件 {mid or '(空ID)'} 提取验证码={code}, 排除={code in exclude_codes}")
                         if code in exclude_codes:
                             continue
                         # 使用 ID 或验证码本身作为 seen 标识符
@@ -953,7 +970,8 @@ class SkyMailMailbox(BaseMailbox):
             timeout=15,
         )
         if r.status_code != 200:
-            raise RuntimeError(f"SkyMail 创建邮箱失败: {r.status_code} {r.text[:200]}")
+            raise RuntimeError(
+                f"SkyMail 创建邮箱失败: {r.status_code} {r.text[:200]}")
 
         data = r.json()
         if data.get("code") != 200:
@@ -989,7 +1007,8 @@ class SkyMailMailbox(BaseMailbox):
             mails = self._list_mails(account.account_id or account.email)
             ids = set()
             for i, msg in enumerate(mails):
-                mid = msg.get("id") or msg.get("mailId") or msg.get("messageId")
+                mid = msg.get("id") or msg.get(
+                    "mailId") or msg.get("messageId")
                 if mid:
                     ids.add(str(mid))
                 else:
@@ -1019,7 +1038,8 @@ class SkyMailMailbox(BaseMailbox):
             try:
                 mails = self._list_mails(target)
                 for i, msg in enumerate(mails):
-                    mid = msg.get("id") or msg.get("mailId") or msg.get("messageId")
+                    mid = msg.get("id") or msg.get(
+                        "mailId") or msg.get("messageId")
                     if not mid:
                         digest = (
                             str(msg.get("date") or msg.get("time") or "")
@@ -1071,7 +1091,8 @@ class DuckMailMailbox(BaseMailbox):
         proxy: str = None,
     ):
         self.api = (api_url or "https://www.duckmail.sbs").rstrip("/")
-        self.provider_url = (provider_url or "https://api.duckmail.sbs").rstrip("/")
+        self.provider_url = (
+            provider_url or "https://api.duckmail.sbs").rstrip("/")
         self.bearer = bearer or "kevin273945"
         self.domain = str(domain or "").strip()
         self.api_key = str(api_key or "").strip()
@@ -1120,9 +1141,11 @@ class DuckMailMailbox(BaseMailbox):
         return r
 
     def get_email(self) -> MailboxAccount:
-        import random, string
+        import random
+        import string
 
-        username = "".join(random.choices(string.ascii_lowercase + string.digits, k=10))
+        username = "".join(random.choices(
+            string.ascii_lowercase + string.digits, k=10))
         password = "Test" + "".join(random.choices(string.digits, k=8)) + "!"
         domain = self.domain or self.provider_url.replace("https://api.", "").replace(
             "https://", ""
@@ -1152,7 +1175,8 @@ class DuckMailMailbox(BaseMailbox):
 
     def get_current_ids(self, account: MailboxAccount) -> set:
         try:
-            r = self._request("GET", "/messages?page=1", token=account.account_id)
+            r = self._request("GET", "/messages?page=1",
+                              token=account.account_id)
             return {str(m["id"]) for m in r.json().get("hydra:member", [])}
         except Exception:
             return set()
@@ -1201,7 +1225,8 @@ class DuckMailMailbox(BaseMailbox):
 
         def poll_once() -> Optional[str]:
             try:
-                r = self._request("GET", "/messages?page=1", token=account.account_id)
+                r = self._request("GET", "/messages?page=1",
+                                  token=account.account_id)
                 msgs = r.json().get("hydra:member", [])
                 for msg in msgs:
                     mid = str(msg.get("id") or msg.get("msgid") or "")
@@ -1338,7 +1363,8 @@ class MaliAPIMailbox(BaseMailbox):
             raise RuntimeError("MaliAPI 未配置：请在全局设置中填写 maliapi_api_key")
 
     def _list_messages(self, account: MailboxAccount) -> list[dict]:
-        data = self._request("GET", "/messages", params={"address": account.email})
+        data = self._request("GET", "/messages",
+                             params={"address": account.email})
         if isinstance(data, dict):
             messages = data.get("messages", [])
         else:
@@ -1365,7 +1391,8 @@ class MaliAPIMailbox(BaseMailbox):
 
         email = str(data.get("address") or data.get("email") or "").strip()
         temp_token = str(
-            data.get("tempToken") or data.get("temp_token") or data.get("token") or ""
+            data.get("tempToken") or data.get(
+                "temp_token") or data.get("token") or ""
         ).strip()
         inbox_id = str(data.get("id") or "").strip()
         if not email:
@@ -1424,14 +1451,16 @@ class MaliAPIMailbox(BaseMailbox):
 
                     search_text = " ".join(
                         [
-                            str(detail.get("subject") or message.get("subject") or ""),
+                            str(detail.get("subject")
+                                or message.get("subject") or ""),
                             str(detail.get("text") or ""),
                             str(detail.get("html") or ""),
                             str(message.get("subject") or ""),
                             str(message.get("snippet") or ""),
                         ]
                     ).strip()
-                    search_text = self._yyds_decode_raw_content(search_text) or search_text
+                    search_text = self._yyds_decode_raw_content(
+                        search_text) or search_text
                     search_text = re.sub(
                         r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
                         "",
@@ -1522,7 +1551,8 @@ class GPTMailMailbox(BaseMailbox):
 
         if response.status_code >= 400:
             error = payload.get("error") if isinstance(payload, dict) else ""
-            message = str(error or response.text or f"HTTP {response.status_code}").strip()
+            message = str(
+                error or response.text or f"HTTP {response.status_code}").strip()
             raise RuntimeError(f"GPTMail API {path} 失败: {message}")
 
         if isinstance(payload, dict) and payload.get("success") is False:
@@ -1534,7 +1564,8 @@ class GPTMailMailbox(BaseMailbox):
         return payload
 
     def _list_messages(self, email: str) -> list[dict]:
-        data = self._request_json("GET", "/api/emails", params={"email": email}, timeout=10)
+        data = self._request_json(
+            "GET", "/api/emails", params={"email": email}, timeout=10)
         if isinstance(data, dict):
             messages = data.get("emails", [])
         else:
@@ -1542,7 +1573,8 @@ class GPTMailMailbox(BaseMailbox):
         return [item for item in (messages or []) if isinstance(item, dict)]
 
     def _get_message_detail(self, message_id: str) -> dict[str, Any]:
-        data = self._request_json("GET", f"/api/email/{message_id}", timeout=10)
+        data = self._request_json(
+            "GET", f"/api/email/{message_id}", timeout=10)
         return data if isinstance(data, dict) else {}
 
     def get_email(self) -> MailboxAccount:
@@ -1553,7 +1585,8 @@ class GPTMailMailbox(BaseMailbox):
             return MailboxAccount(
                 email=email,
                 account_id=email,
-                extra={"provider": "gptmail", "domain": self.domain, "local_address": True},
+                extra={"provider": "gptmail",
+                       "domain": self.domain, "local_address": True},
             )
 
         data = self._request_json("GET", "/api/generate-email")
@@ -1624,7 +1657,8 @@ class GPTMailMailbox(BaseMailbox):
                             str(detail.get("raw_headers") or ""),
                         ]
                     ).strip()
-                    search_text = self._decode_raw_content(search_text) or search_text
+                    search_text = self._decode_raw_content(
+                        search_text) or search_text
                     search_text = re.sub(
                         r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
                         "",
@@ -1725,7 +1759,8 @@ class OpenTrashMailMailbox(BaseMailbox):
         if not text:
             return ""
 
-        match = re.search(r"/address/([^\"'<>\s]+@[^\"'<>\s]+)", text, re.IGNORECASE)
+        match = re.search(
+            r"/address/([^\"'<>\s]+@[^\"'<>\s]+)", text, re.IGNORECASE)
         if match:
             return str(match.group(1) or "").strip()
 
@@ -1873,12 +1908,15 @@ class OpenTrashMailMailbox(BaseMailbox):
                         continue
                     seen.add(message_id)
 
-                    detail = self._get_message_detail(account.email, message_id)
-                    parsed = detail.get("parsed") if isinstance(detail, dict) else {}
+                    detail = self._get_message_detail(
+                        account.email, message_id)
+                    parsed = detail.get("parsed") if isinstance(
+                        detail, dict) else {}
                     if not isinstance(parsed, dict):
                         parsed = {}
 
-                    decoded_raw = self._decode_raw_content(detail.get("raw") or "")
+                    decoded_raw = self._decode_raw_content(
+                        detail.get("raw") or "")
                     search_text = " ".join(
                         [
                             str(message.get("subject") or ""),
@@ -1941,7 +1979,8 @@ class CFWorkerMailbox(BaseMailbox):
         raw_enabled_domains = self._parse_domains(enabled_domains)
         if self.domains:
             allowed = set(self.domains)
-            self.enabled_domains = [d for d in raw_enabled_domains if d in allowed]
+            self.enabled_domains = [
+                d for d in raw_enabled_domains if d in allowed]
         else:
             self.enabled_domains = raw_enabled_domains
         self.subdomain = self._normalize_subdomain(subdomain)
@@ -2183,7 +2222,8 @@ class CFWorkerMailbox(BaseMailbox):
                     if otp_cutoff and created_at:
                         try:
                             mail_ts = (
-                                datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
+                                datetime.strptime(
+                                    created_at, "%Y-%m-%d %H:%M:%S")
                                 .replace(tzinfo=timezone.utc)
                                 .timestamp()
                             )
@@ -2200,7 +2240,8 @@ class CFWorkerMailbox(BaseMailbox):
 
                     raw = str(mail.get("raw", ""))
                     subject = str(mail.get("subject", ""))
-                    search_text = f"{subject} {self._decode_raw_content(raw)}".strip()
+                    search_text = f"{subject} {self._decode_raw_content(raw)}".strip(
+                    )
                     search_text = re.sub(
                         r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
                         "",
@@ -2252,22 +2293,27 @@ class MoeMailMailbox(BaseMailbox):
         return {"X-API-Key": self.api_key}
 
     def _register_and_login(self) -> str:
-        import requests, random, string
+        import requests
+        import random
+        import string
 
         s = requests.Session()
         s.proxies = self.proxy
         ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
         s.headers.update(
-            {"user-agent": ua, "origin": self.api, "referer": f"{self.api}/zh-CN/login"}
+            {"user-agent": ua, "origin": self.api,
+                "referer": f"{self.api}/zh-CN/login"}
         )
         s.headers.update(self._api_headers())
         # 注册
-        username = "".join(random.choices(string.ascii_lowercase + string.digits, k=12))
+        username = "".join(random.choices(
+            string.ascii_lowercase + string.digits, k=12))
         password = "Test" + "".join(random.choices(string.digits, k=8)) + "!"
         print(f"[MoeMail] 注册账号: {username} / {password}")
         r_reg = s.post(
             f"{self.api}/api/auth/register",
-            json={"username": username, "password": password, "turnstileToken": ""},
+            json={"username": username,
+                  "password": password, "turnstileToken": ""},
             timeout=15,
         )
         print(f"[MoeMail] 注册结果: {r_reg.status_code} {r_reg.text[:80]}")
@@ -2295,9 +2341,11 @@ class MoeMailMailbox(BaseMailbox):
         # 每次调用都重新注册新账号，保证邮箱唯一
         self._session_token = None
         self._register_and_login()
-        import random, string
+        import random
+        import string
 
-        name = "".join(random.choices(string.ascii_letters + string.digits, k=8))
+        name = "".join(random.choices(
+            string.ascii_letters + string.digits, k=8))
         # 获取可用域名列表，随机选一个
         domain = "sall.cc"
         try:
@@ -2744,11 +2792,12 @@ class FreemailMailbox(BaseMailbox):
             self._get_session()
         import requests
         import traceback
-        
+
         # 记录调用栈，追踪是谁在创建邮箱
         self._log(f"[Freemail] 正在调用 get_email() 创建新邮箱...")
-        self._log(f"[Freemail] 调用栈:\n{''.join(traceback.format_stack()[-5:-1])}")
-        
+        self._log(
+            f"[Freemail] 调用栈:\n{''.join(traceback.format_stack()[-5:-1])}")
+
         r = self._session.get(f"{self.api}/api/generate", timeout=15)
         data = r.json()
         email = data.get("email", "")
@@ -2799,7 +2848,8 @@ class FreemailMailbox(BaseMailbox):
                     params=params,
                     timeout=10,
                 )
-                self._log(f"[Freemail] 响应状态: {r.status_code}, 响应前 200 字符: {r.text[:200]}")
+                self._log(
+                    f"[Freemail] 响应状态: {r.status_code}, 响应前 200 字符: {r.text[:200]}")
                 try:
                     emails = r.json()
                 except Exception as json_err:
@@ -2814,7 +2864,8 @@ class FreemailMailbox(BaseMailbox):
                     # 优先用 verification_code 字段
                     code = str(msg.get("verification_code") or "").strip()
                     if code and code != "None":
-                        self._log(f"[Freemail] 邮件 {mid} verification_code={code}, 排除={code in exclude_codes}")
+                        self._log(
+                            f"[Freemail] 邮件 {mid} verification_code={code}, 排除={code in exclude_codes}")
                         if code in exclude_codes:
                             continue
                         return code
@@ -2822,11 +2873,13 @@ class FreemailMailbox(BaseMailbox):
                     text = (
                         str(msg.get("preview", "")) + " " +
                         str(msg.get("subject", "")) + " " +
-                        str(msg.get("body", "") or msg.get("html", "") or msg.get("text", "") or "")
+                        str(msg.get("body", "") or msg.get(
+                            "html", "") or msg.get("text", "") or "")
                     )
                     code = self._safe_extract(text, code_pattern)
                     if code:
-                        self._log(f"[Freemail] 邮件 {mid} 提取验证码={code}, 排除={code in exclude_codes}")
+                        self._log(
+                            f"[Freemail] 邮件 {mid} 提取验证码={code}, 排除={code in exclude_codes}")
                         if code in exclude_codes:
                             continue
                         return code

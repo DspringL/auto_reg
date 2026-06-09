@@ -8,6 +8,7 @@ import json
 def _utcnow():
     return datetime.now(timezone.utc)
 
+
 DATABASE_URL = "sqlite:///account_manager.db"
 engine = create_engine(DATABASE_URL)
 
@@ -79,7 +80,8 @@ def save_account(account) -> 'AccountModel':
             existing.region = account.region or ""
             existing.token = account.token or ""
             existing.status = account.status.value
-            existing.extra_json = json.dumps(account.extra or {}, ensure_ascii=False)
+            existing.extra_json = json.dumps(
+                account.extra or {}, ensure_ascii=False)
             existing.cashier_url = (account.extra or {}).get("cashier_url", "")
             existing.updated_at = _utcnow()
             session.add(existing)

@@ -4,7 +4,11 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 from typing import Optional
 from core.db import TaskLog, engine
-import time, json, asyncio, threading, logging
+import time
+import json
+import asyncio
+import threading
+import logging
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 logger = logging.getLogger(__name__)
@@ -38,8 +42,10 @@ class RegisterTaskRequest(BaseModel):
     count: int = Field(default=1, ge=1, le=1000)  # 最大支持 1000 个
     concurrency: int = Field(default=1, ge=1, le=10)  # 最大并发 10
     register_delay_seconds: float = Field(default=0, ge=0)
-    random_delay_min: Optional[float] = Field(default=None, ge=0)  # 随机延迟最小值 (秒)
-    random_delay_max: Optional[float] = Field(default=None, ge=0)  # 随机延迟最大值 (秒)
+    random_delay_min: Optional[float] = Field(
+        default=None, ge=0)  # 随机延迟最小值 (秒)
+    random_delay_max: Optional[float] = Field(
+        default=None, ge=0)  # 随机延迟最大值 (秒)
     proxy: Optional[str] = None
     executor_type: str = "protocol"
     captcha_solver: str = "yescaptcha"
@@ -88,7 +94,8 @@ def _auto_upload_integrations(task_id: str, account):
             name = result.get("name", "Auto Upload")
             ok = bool(result.get("ok"))
             msg = result.get("msg", "")
-            _log(task_id, f"  [{name}] {'[OK] ' + msg if ok else '[FAIL] ' + msg}")
+            _log(
+                task_id, f"  [{name}] {'[OK] ' + msg if ok else '[FAIL] ' + msg}")
     except Exception as e:
         _log(task_id, f"  [Auto Upload] 自动导入异常: {e}")
 
@@ -113,7 +120,8 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
         def _build_mailbox(proxy: Optional[str]):
             from core.config_store import config_store
             merged_extra = config_store.get_all().copy()
-            merged_extra.update({k: v for k, v in req.extra.items() if v is not None and v != ""})
+            merged_extra.update(
+                {k: v for k, v in req.extra.items() if v is not None and v != ""})
             return create_mailbox(
                 provider=merged_extra.get("mail_provider", "laoudo"),
                 extra=merged_extra,
@@ -139,25 +147,29 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                     with start_gate_lock:
                         now = time.time()
                         wait_seconds = max(0.0, next_start_time - now)
-                        
+
                         # 固定延迟
                         if req.register_delay_seconds > 0 and wait_seconds > 0:
-                            _log(task_id, f"第 {i+1} 个账号启动前延迟 {wait_seconds:g} 秒")
+                            _log(
+                                task_id, f"第 {i+1} 个账号启动前延迟 {wait_seconds:g} 秒")
                             time.sleep(wait_seconds)
                         next_start_time = time.time() + req.register_delay_seconds
-                        
+
                         # 随机延迟
                         if req.random_delay_min is not None and req.random_delay_max is not None:
                             import random
-                            random_delay = random.uniform(req.random_delay_min, req.random_delay_max)
+                            random_delay = random.uniform(
+                                req.random_delay_min, req.random_delay_max)
                             if random_delay > 0:
-                                _log(task_id, f"第 {i+1} 个账号随机延迟 {random_delay:.1f} 秒 ({req.random_delay_min}-{req.random_delay_max}秒)")
+                                _log(
+                                    task_id, f"第 {i+1} 个账号随机延迟 {random_delay:.1f} 秒 ({req.random_delay_min}-{req.random_delay_max}秒)")
                                 time.sleep(random_delay)
                             next_start_time = time.time() + random_delay
                 from core.config_store import config_store
                 merged_extra = config_store.get_all().copy()
-                merged_extra.update({k: v for k, v in req.extra.items() if v is not None and v != ""})
-                
+                merged_extra.update(
+                    {k: v for k, v in req.extra.items() if v is not None and v != ""})
+
                 _config = RegisterConfig(
                     executor_type=req.executor_type,
                     captcha_solver=req.captcha_solver,
@@ -172,7 +184,8 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 with _tasks_lock:
                     _tasks[task_id]["progress"] = f"{i+1}/{req.count}"
                 _log(task_id, f"开始注册第 {i+1}/{req.count} 个账号")
-                if _proxy: _log(task_id, f"使用代理: {_proxy}")
+                if _proxy:
+                    _log(task_id, f"使用代理: {_proxy}")
                 account = _platform.register(
                     email=req.email or None,
                     password=req.password,
@@ -180,21 +193,28 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 if isinstance(account.extra, dict):
                     mail_provider = merged_extra.get("mail_provider", "")
                     if mail_provider:
-                        account.extra.setdefault("mail_provider", mail_provider)
+                        account.extra.setdefault(
+                            "mail_provider", mail_provider)
                     if mail_provider == "luckmail" and req.platform == "chatgpt":
                         mailbox_token = getattr(_mailbox, "_token", "") or ""
                         if mailbox_token:
-                            account.extra.setdefault("mailbox_token", mailbox_token)
+                            account.extra.setdefault(
+                                "mailbox_token", mailbox_token)
                         if merged_extra.get("luckmail_project_code"):
-                            account.extra.setdefault("luckmail_project_code", merged_extra.get("luckmail_project_code"))
+                            account.extra.setdefault(
+                                "luckmail_project_code", merged_extra.get("luckmail_project_code"))
                         if merged_extra.get("luckmail_email_type"):
-                            account.extra.setdefault("luckmail_email_type", merged_extra.get("luckmail_email_type"))
+                            account.extra.setdefault(
+                                "luckmail_email_type", merged_extra.get("luckmail_email_type"))
                         if merged_extra.get("luckmail_domain"):
-                            account.extra.setdefault("luckmail_domain", merged_extra.get("luckmail_domain"))
+                            account.extra.setdefault(
+                                "luckmail_domain", merged_extra.get("luckmail_domain"))
                         if merged_extra.get("luckmail_base_url"):
-                            account.extra.setdefault("luckmail_base_url", merged_extra.get("luckmail_base_url"))
+                            account.extra.setdefault(
+                                "luckmail_base_url", merged_extra.get("luckmail_base_url"))
                 saved_account = save_account(account)
-                if _proxy: proxy_pool.report_success(_proxy)
+                if _proxy:
+                    proxy_pool.report_success(_proxy)
                 _log(task_id, f"[OK] 注册成功: {account.email}")
                 _save_task_log(req.platform, account.email, "success")
                 _auto_upload_integrations(task_id, saved_account or account)
@@ -202,12 +222,15 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 if cashier_url:
                     _log(task_id, f"  [升级链接] {cashier_url}")
                     with _tasks_lock:
-                        _tasks[task_id].setdefault("cashier_urls", []).append(cashier_url)
+                        _tasks[task_id].setdefault(
+                            "cashier_urls", []).append(cashier_url)
                 return True
             except Exception as e:
-                if _proxy: proxy_pool.report_fail(_proxy)
+                if _proxy:
+                    proxy_pool.report_fail(_proxy)
                 _log(task_id, f"[FAIL] 注册失败: {e}")
-                _save_task_log(req.platform, req.email or "", "failed", error=str(e))
+                _save_task_log(req.platform, req.email or "",
+                               "failed", error=str(e))
                 return str(e)
             finally:
                 if _mailbox is not None:
@@ -240,7 +263,8 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
 
     # 检查是否被停止
     with _tasks_lock:
-        was_stopped = _tasks.get(task_id, {}).get("control", {}).get("stop_requested", False)
+        was_stopped = _tasks.get(task_id, {}).get(
+            "control", {}).get("stop_requested", False)
     if was_stopped:
         with _tasks_lock:
             _tasks[task_id]["status"] = "stopped"
@@ -266,7 +290,7 @@ def create_register_task(
         platform = req.platform
         if platform in ("tavily", "openblocklabs"):
             raise HTTPException(400, f"LuckMail 渠道暂时不支持 {platform} 项目注册")
-        
+
         mapping = {
             "trae": "trae",
             "cursor": "cursor",
@@ -307,7 +331,8 @@ def batch_delete_logs(body: TaskLogBatchDeleteRequest):
 
     with Session(engine) as s:
         try:
-            logs = s.exec(select(TaskLog).where(TaskLog.id.in_(unique_ids))).all()
+            logs = s.exec(select(TaskLog).where(
+                TaskLog.id.in_(unique_ids))).all()
             found_ids = {log.id for log in logs if log.id is not None}
 
             for log in logs:
@@ -315,7 +340,8 @@ def batch_delete_logs(body: TaskLogBatchDeleteRequest):
 
             s.commit()
             deleted_count = len(found_ids)
-            not_found_ids = [log_id for log_id in unique_ids if log_id not in found_ids]
+            not_found_ids = [
+                log_id for log_id in unique_ids if log_id not in found_ids]
             logger.info("批量删除任务历史成功: %s 条", deleted_count)
 
             return {
@@ -360,7 +386,6 @@ async def stream_logs(task_id: str, since: int = 0):
     )
 
 
-
 # 定时任务管理 API
 @router.post("/schedule/{task_id}/run")
 def run_scheduled_task_now(task_id: str, background_tasks: BackgroundTasks):
@@ -368,25 +393,26 @@ def run_scheduled_task_now(task_id: str, background_tasks: BackgroundTasks):
     from core.scheduler import get_scheduled_register_tasks, update_task_run_status
     from api.tasks import _run_register, _log
     import logging
-    
+
     logger = logging.getLogger(__name__)
-    
+
     tasks = get_scheduled_register_tasks()
     if task_id not in tasks:
         raise HTTPException(404, "任务不存在")
-    
+
     task_config = tasks[task_id]
     run_task_id = f"manual_{task_id}_{int(time.time())}"
-    
+
     # 创建 RegisterTaskRequest
     req = RegisterTaskRequest(**task_config)
     logger.info(f"准备手动运行任务 {run_task_id}, 配置：{task_config}")
-    
+
     def run_with_status():
         try:
             # 先初始化 _tasks 记录
             with _tasks_lock:
-                _tasks[run_task_id] = {"id": run_task_id, "status": "pending", "progress": "0/1", "logs": []}
+                _tasks[run_task_id] = {
+                    "id": run_task_id, "status": "pending", "progress": "0/1", "logs": []}
             # 先记录开始
             _log(run_task_id, f"开始手动运行定时任务 {task_id}")
             _run_register(run_task_id, req)
@@ -400,25 +426,27 @@ def run_scheduled_task_now(task_id: str, background_tasks: BackgroundTasks):
             error_msg = f"{str(e)}\n{traceback.format_exc()}"
             update_task_run_status(task_id, False, error_msg)
             logger.error(f"任务 {run_task_id} 运行失败：{error_msg}")
-    
+
     background_tasks.add_task(run_with_status)
-    
+
     return {"task_id": run_task_id, "status": "running"}
+
 
 @router.post("/schedule/{task_id}/toggle")
 def toggle_scheduled_task(task_id: str):
     """暂停或恢复定时任务"""
     from core.scheduler import get_scheduled_register_tasks, add_scheduled_register_task
-    
+
     tasks = get_scheduled_register_tasks()
     if task_id not in tasks:
         raise HTTPException(404, "任务不存在")
-    
+
     task_config = tasks[task_id]
     task_config['paused'] = not task_config.get('paused', False)
     add_scheduled_register_task(task_id, task_config)
-    
+
     return {"task_id": task_id, "paused": task_config['paused']}
+
 
 @router.post("/schedule")
 def create_scheduled_task(body: RegisterTaskRequest):
@@ -426,9 +454,9 @@ def create_scheduled_task(body: RegisterTaskRequest):
     import uuid
     from core.db import ScheduledTaskModel, Session, engine
     from sqlmodel import select
-    
+
     task_id = f"sched_{uuid.uuid4().hex[:8]}"
-    
+
     # 保存到数据库
     db_task = ScheduledTaskModel(
         task_id=task_id,
@@ -445,13 +473,13 @@ def create_scheduled_task(body: RegisterTaskRequest):
         s.add(db_task)
         s.commit()
         s.refresh(db_task)
-    
+
     # 添加到内存
     from core.scheduler import add_scheduled_register_task
     config = body.dict()
     config['task_id'] = task_id
     add_scheduled_register_task(task_id, config)
-    
+
     # 创建后立即在线程中执行一次
     def run_now():
         run_task_id = f"scheduled_{task_id}_{int(time.time())}"
@@ -460,7 +488,8 @@ def create_scheduled_task(body: RegisterTaskRequest):
         try:
             # 先初始化 _tasks 记录
             with _tasks_lock:
-                _tasks[run_task_id] = {"id": run_task_id, "status": "pending", "progress": "0/1", "logs": []}
+                _tasks[run_task_id] = {
+                    "id": run_task_id, "status": "pending", "progress": "0/1", "logs": []}
             req = RegisterTaskRequest(**config)
             _run_register(run_task_id, req)
             success = True
@@ -472,10 +501,10 @@ def create_scheduled_task(body: RegisterTaskRequest):
             # 更新任务运行状态
             from core.scheduler import update_task_run_status
             update_task_run_status(task_id, success, error_msg)
-    
+
     threading.Thread(target=run_now, daemon=True).start()
     print(f"[Scheduler] 任务 {task_id} 已创建并启动", flush=True)
-    
+
     return {"task_id": task_id, "status": "scheduled", "config": config}
 
 
@@ -485,7 +514,7 @@ def list_scheduled_tasks():
     from core.scheduler import get_scheduled_register_tasks, get_all_task_run_status
     tasks = get_scheduled_register_tasks()
     run_status = get_all_task_run_status()
-    
+
     # 合并运行状态
     result = []
     for task in tasks.values():
@@ -498,7 +527,7 @@ def list_scheduled_tasks():
             task_data.setdefault("last_run_success", None)
             task_data.setdefault("last_error", None)
         result.append(task_data)
-    
+
     return {"tasks": result}
 
 
@@ -508,6 +537,7 @@ def delete_scheduled_task(task_id: str):
     from core.scheduler import remove_scheduled_register_task
     remove_scheduled_register_task(task_id)
     return {"ok": True}
+
 
 @router.get("/{task_id}")
 def get_task(task_id: str):
@@ -536,35 +566,33 @@ def list_tasks():
         return list(_tasks.values())
 
 
-
 # 定时任务管理 API - 更新任务
 @router.put("/schedule")
 def update_scheduled_task(body: RegisterTaskRequest):
     """更新定时任务配置"""
     from core.scheduler import get_scheduled_register_tasks, add_scheduled_register_task, remove_scheduled_register_task
-    
+
     # 从根级别或 extra 中获取 task_id
-    task_id = getattr(body, 'task_id', None) or (body.extra and body.extra.get('task_id'))
+    task_id = getattr(body, 'task_id', None) or (
+        body.extra and body.extra.get('task_id'))
     if not task_id:
         raise HTTPException(400, "缺少任务 ID")
-    
+
     tasks = get_scheduled_register_tasks()
     if task_id not in tasks:
         raise HTTPException(404, "任务不存在")
-    
+
     config = body.dict()
     config['task_id'] = task_id
     add_scheduled_register_task(task_id, config)
-    
+
     return {"task_id": task_id, "status": "updated", "config": config}
 
 
 # 手动运行定时任务
 
 
-
 # 暂停/恢复定时任务
-
 
 
 @router.delete("/schedule/{task_id}")
@@ -572,13 +600,13 @@ def delete_scheduled_task(task_id: str):
     """删除定时任务"""
     from core.db import ScheduledTaskModel, Session, engine
     from core.scheduler import remove_scheduled_register_task
-    
+
     with Session(engine) as s:
         task = s.get(ScheduledTaskModel, task_id)
         if task:
             s.delete(task)
             s.commit()
-    
+
     remove_scheduled_register_task(task_id)
     return {"ok": True}
 
@@ -588,7 +616,7 @@ def toggle_scheduled_task(task_id: str):
     """暂停或恢复定时任务"""
     from core.db import ScheduledTaskModel, Session, engine
     from core.scheduler import add_scheduled_register_task, get_scheduled_register_tasks
-    
+
     with Session(engine) as s:
         task = s.get(ScheduledTaskModel, task_id)
         if not task:
@@ -597,11 +625,11 @@ def toggle_scheduled_task(task_id: str):
         task.updated_at = datetime.now(timezone.utc)
         s.add(task)
         s.commit()
-        
+
         # 更新内存中的任务
         tasks = get_scheduled_register_tasks()
         if task_id in tasks:
             tasks[task_id]['paused'] = task.paused
             add_scheduled_register_task(task_id, tasks[task_id])
-    
+
     return {"task_id": task_id, "paused": task.paused}
