@@ -16,11 +16,19 @@ class KiroPlatform(BasePlatform):
 
     def register(self, email: str, password: str = None) -> Account:
         from platforms.kiro.core import KiroRegister
+        from core.config_store import config_store
 
         proxy = self.config.proxy
         laoudo_account_id = self.config.extra.get("laoudo_account_id", "")
 
-        reg = KiroRegister(proxy=proxy, tag="KIRO")
+        # 从全局配置读取执行器类型，以决定是否无头模式
+        default_executor = self.config.extra.get(
+            "default_executor",
+            config_store.get("default_executor", "headless"),
+        )
+        headless = default_executor != "headed"
+
+        reg = KiroRegister(proxy=proxy, tag="KIRO", headless=headless)
         log_fn = getattr(self, '_log_fn', print)
         reg.log = lambda msg: log_fn(msg)
 

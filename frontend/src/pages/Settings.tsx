@@ -494,6 +494,174 @@ function MailboxSections({ form, sections }: { form: any; sections: SectionConfi
     )
 }
 
+function CFWorkerInstancesSection({ form }: { form: any }) {
+    const instances: any[] = Form.useWatch('cfworker_instances', form) || []
+    const strategy: string = Form.useWatch('cfworker_strategy', form) || 'random'
+
+    const addInstance = () => {
+        const current = Array.isArray(form.getFieldValue('cfworker_instances'))
+            ? [...form.getFieldValue('cfworker_instances')]
+            : []
+        const newId = `inst_${Date.now()}`
+        form.setFieldValue('cfworker_instances', [
+            ...current,
+            { id: newId, name: `实例 ${current.length + 1}`, enabled: true, api_url: '', admin_token: '', custom_auth: '', subdomain: '', random_subdomain: false, fingerprint: '' },
+        ])
+    }
+
+    const removeInstance = (idx: number) => {
+        const current = [...(form.getFieldValue('cfworker_instances') || [])]
+        current.splice(idx, 1)
+        form.setFieldValue('cfworker_instances', current)
+    }
+
+    const toggleInstance = (idx: number, enabled: boolean) => {
+        const current = [...(form.getFieldValue('cfworker_instances') || [])]
+        current[idx] = { ...current[idx], enabled }
+        form.setFieldValue('cfworker_instances', current)
+    }
+
+    const strategyOptions = [
+        { label: '随机', value: 'random' },
+        { label: '轮询', value: 'round_robin' },
+        { label: '指定实例', value: 'specified' },
+    ]
+
+    const enabledInstances = instances.filter((inst) => inst?.enabled)
+
+    return (
+        <Card
+            title="CF Worker 多实例管理"
+            extra={<span style={{ fontSize: 12, color: '#7a8ba3' }}>配置多个 CF Worker 实例，按策略分配使用</span>}
+            style={{ marginBottom: 16 }}
+        >
+            {/* 策略选择 */}
+            <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>选取策略：</span>
+                    <Form.Item name="cfworker_strategy" style={{ margin: 0 }}>
+                        <Select options={strategyOptions} style={{ width: 140 }} />
+                    </Form.Item>
+                </div>
+                {strategy === 'specified' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>指定实例：</span>
+                        <Form.Item name="cfworker_specified_id" style={{ margin: 0 }}>
+                            <Select
+                                style={{ width: 180 }}
+                                placeholder="选择实例"
+                                options={enabledInstances.map((inst) => ({
+                                    label: inst.name || inst.id,
+                                    value: inst.id,
+                                }))}
+                            />
+                        </Form.Item>
+                    </div>
+                )}
+            </div>
+
+            {/* 实例列表 */}
+            <Form.List name="cfworker_instances">
+                {(fields) => (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        {fields.map((field, idx) => {
+                            const inst = instances[idx] || {}
+                            return (
+                                <Card
+                                    key={field.key}
+                                    size="small"
+                                    style={{
+                                        border: inst.enabled ? '1px solid #4096ff' : '1px solid #d9d9d9',
+                                        opacity: inst.enabled ? 1 : 0.6,
+                                    }}
+                                    title={
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            <Switch
+                                                size="small"
+                                                checked={!!inst.enabled}
+                                                onChange={(checked) => toggleInstance(idx, checked)}
+                                                checkedChildren="启用"
+                                                unCheckedChildren="禁用"
+                                            />
+                                            <Form.Item name={[field.name, 'name']} style={{ margin: 0, flex: 1 }}>
+                                                <Input
+                                                    variant="borderless"
+                                                    placeholder={`实例 ${idx + 1}`}
+                                                    style={{ fontWeight: 500, padding: '0 4px' }}
+                                                />
+                                            </Form.Item>
+                                        </div>
+                                    }
+                                    extra={
+                                        <Button danger size="small" onClick={() => removeInstance(idx)}>
+                                            删除
+                                        </Button>
+                                    }
+                                >
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+                                        <Form.Item label="API URL" name={[field.name, 'api_url']} style={{ marginBottom: 8 }}>
+                                            <Input placeholder="https://apimail.example.com" />
+                                        </Form.Item>
+                                        <Form.Item label="管理员 Token" name={[field.name, 'admin_token']} style={{ marginBottom: 8 }}>
+                                            <Input.Password placeholder="admin token" />
+                                        </Form.Item>
+                                        <Form.Item label="站点密码" name={[field.name, 'custom_auth']} style={{ marginBottom: 8 }}>
+                                            <Input.Password placeholder="x-custom-auth（可选）" />
+                                        </Form.Item>
+                                        <Form.Item label="域名" name={[field.name, 'domain']} style={{ marginBottom: 8 }}>
+                                            <Input placeholder="mail.example.com" />
+                                        </Form.Item>
+                                        <Form.Item label="固定子域名" name={[field.name, 'subdomain']} style={{ marginBottom: 8 }}>
+                                            <Input placeholder="pool-a（可选）" />
+                                        </Form.Item>
+                                        <Form.Item label="Fingerprint" name={[field.name, 'fingerprint']} style={{ marginBottom: 8 }}>
+                                            <Input placeholder="6703363b...（可选）" />
+                                        </Form.Item>
+                                    </div>
+                                    <Form.Item
+                                        label="随机子域名"
+                                        name={[field.name, 'random_subdomain']}
+                                        valuePropName="checked"
+                                        style={{ marginBottom: 0 }}
+                                    >
+                                        <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                                    </Form.Item>
+                                    {/* 隐藏 id 字段保持稳定 */}
+                                    <Form.Item name={[field.name, 'id']} hidden>
+                                        <Input />
+                                    </Form.Item>
+                                    <Form.Item name={[field.name, 'enabled']} hidden valuePropName="checked">
+                                        <Switch />
+                                    </Form.Item>
+                                </Card>
+                            )
+                        })}
+                        {fields.length === 0 && (
+                            <Typography.Text type="secondary">
+                                还没有实例。添加后可配置多个 CF Worker 端点，并设置上方策略。
+                            </Typography.Text>
+                        )}
+                    </div>
+                )}
+            </Form.List>
+
+            <Button
+                type="dashed"
+                icon={<PlusOutlined />}
+                block
+                style={{ marginTop: 12 }}
+                onClick={addInstance}
+            >
+                添加实例
+            </Button>
+
+            <Typography.Text type="secondary" style={{ display: 'block', marginTop: 12, fontSize: 12 }}>
+                多实例启用时按上方策略分配；未配置实例则回退到下方单实例配置（旧版兼容）。
+            </Typography.Text>
+        </Card>
+    )
+}
+
 function CFWorkerDomainPoolSection({ form }: { form: any }) {
     const watchedDomains = Form.useWatch('cfworker_domains', form) || []
     const watchedEnabledDomains = Form.useWatch('cfworker_enabled_domains', form) || []
@@ -1127,6 +1295,16 @@ export default function Settings() {
             data.cfworker_domains = parseStoredDomainList(data.cfworker_domains)
             data.cfworker_enabled_domains = parseStoredDomainList(data.cfworker_enabled_domains)
             data.cfworker_random_subdomain = parseBooleanConfigValue(data.cfworker_random_subdomain)
+            // 解析多实例配置
+            if (typeof data.cfworker_instances === 'string') {
+                try { data.cfworker_instances = JSON.parse(data.cfworker_instances) } catch { data.cfworker_instances = [] }
+            }
+            if (!Array.isArray(data.cfworker_instances)) {
+                data.cfworker_instances = []
+            }
+            if (!data.cfworker_strategy) {
+                data.cfworker_strategy = 'random'
+            }
             form.setFieldsValue(data)
         })
     }, [form])
@@ -1138,7 +1316,9 @@ export default function Settings() {
             const domains = normalizeDomainList(values.cfworker_domains)
             const enabledDomains = normalizeDomainList(values.cfworker_enabled_domains).filter((domain) => domains.includes(domain))
 
-            if (domains.length > 0 && enabledDomains.length === 0) {
+            // 仅在没有多实例配置时才校验旧版域名池
+            const instances = Array.isArray(values.cfworker_instances) ? values.cfworker_instances.filter((inst: any) => inst?.enabled) : []
+            if (instances.length === 0 && domains.length > 0 && enabledDomains.length === 0) {
                 setActiveTab('mailbox')
                 message.error('CF Worker 至少需要启用一个域名')
                 return
@@ -1151,12 +1331,20 @@ export default function Settings() {
             }
             values.cfworker_random_subdomain = parseBooleanConfigValue(values.cfworker_random_subdomain)
 
+            // 序列化多实例配置
+            if (Array.isArray(values.cfworker_instances)) {
+                values.cfworker_instances = JSON.stringify(values.cfworker_instances)
+            }
+
             await apiFetch('/config', { method: 'PUT', body: JSON.stringify({ data: values }) })
             form.setFieldsValue({
                 cfworker_domains: domains,
                 cfworker_enabled_domains: enabledDomains,
                 cfworker_domain: domains.length > 0 ? '' : values.cfworker_domain,
                 cfworker_random_subdomain: values.cfworker_random_subdomain,
+                cfworker_instances: Array.isArray(values.cfworker_instances)
+                    ? values.cfworker_instances
+                    : (() => { try { return JSON.parse(values.cfworker_instances) } catch { return [] } })(),
             })
             message.success('保存成功')
             setSaved(true)
@@ -1205,7 +1393,12 @@ export default function Settings() {
                             {activeTab === 'mailbox' ? (
                                 <>
                                     <MailboxSections form={form} sections={currentTab.sections} />
-                                    {selectedMailProvider === 'cfworker' ? <CFWorkerDomainPoolSection form={form} /> : null}
+                                    {selectedMailProvider === 'cfworker' ? (
+                                        <>
+                                            <CFWorkerInstancesSection form={form} />
+                                            <CFWorkerDomainPoolSection form={form} />
+                                        </>
+                                    ) : null}
                                 </>
                             ) : (
                                 currentTab.sections.map((section) => <ConfigSection key={section.title} section={section} />)

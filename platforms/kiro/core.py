@@ -798,11 +798,8 @@ class KiroRegister:
                 ).first
                 if email_input.count() > 0 and email_input.is_visible():
                     self.log("桌面授权页要求重新登录，正在填写 Email ...")
-                    try:
-                        email_input.fill("")
-                    except Exception:
-                        pass
-                    self._type_like_human(page, email_input, email)
+                    email_input.click()
+                    email_input.fill(email)
                     self._click_primary_button(page)
                     self._human_sleep(0.7, 1.4)
         except Exception:
@@ -1019,11 +1016,8 @@ class KiroRegister:
                 'input[placeholder="username@example.com"], input[type="email"]'
             ).first
             email_input.wait_for(state="visible", timeout=15000)
-            self._type_like_human(
-                page,
-                'input[placeholder="username@example.com"], input[type="email"]',
-                email,
-            )
+            email_input.click()
+            email_input.fill(email)
             self._click_primary_button(page)
             self._human_sleep(1.1, 2.4)
             self._solve_captcha_if_exists(page)

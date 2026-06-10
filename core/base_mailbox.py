@@ -597,6 +597,55 @@ def create_mailbox(
             proxy=proxy,
         )
     elif provider == "cfworker":
+        # 多实例支持：优先从 cfworker_instances 中按策略选取
+        instances_raw = extra.get("cfworker_instances", "")
+        instances = []
+        if instances_raw:
+            try:
+                import json as _json
+                parsed = _json.loads(instances_raw) if isinstance(instances_raw, str) else instances_raw
+                if isinstance(parsed, list):
+                    instances = [inst for inst in parsed if isinstance(inst, dict) and inst.get("enabled", True)]
+            except Exception:
+                instances = []
+
+        if instances:
+            strategy = str(extra.get("cfworker_strategy", "random") or "random").strip()
+            chosen = None
+            if strategy == "specified":
+                specified_id = str(extra.get("cfworker_specified_id", "") or "").strip()
+                chosen = next((inst for inst in instances if str(inst.get("id", "")) == specified_id), None)
+                if chosen is None:
+                    chosen = instances[0]
+            elif strategy == "round_robin":
+                import threading
+                _rr_lock = getattr(create_mailbox, "_cfworker_rr_lock", None)
+                if _rr_lock is None:
+                    create_mailbox._cfworker_rr_lock = threading.Lock()
+                    create_mailbox._cfworker_rr_index = 0
+                with create_mailbox._cfworker_rr_lock:
+                    idx = create_mailbox._cfworker_rr_index % len(instances)
+                    chosen = instances[idx]
+                    create_mailbox._cfworker_rr_index = idx + 1
+            else:  # random (default)
+                import random as _random
+                chosen = _random.choice(instances)
+
+            return CFWorkerMailbox(
+                api_url=chosen.get("api_url", ""),
+                admin_token=chosen.get("admin_token", ""),
+                domain=chosen.get("domain", ""),
+                domain_override=chosen.get("domain_override", ""),
+                domains=chosen.get("domains", ""),
+                enabled_domains=chosen.get("enabled_domains", ""),
+                subdomain=chosen.get("subdomain", ""),
+                random_subdomain=chosen.get("random_subdomain", False),
+                fingerprint=chosen.get("fingerprint", ""),
+                custom_auth=chosen.get("custom_auth", ""),
+                proxy=proxy,
+            )
+
+        # 兼容旧版单实例配置
         return CFWorkerMailbox(
             api_url=extra.get("cfworker_api_url", ""),
             admin_token=extra.get("cfworker_admin_token", ""),
