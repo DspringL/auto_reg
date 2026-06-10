@@ -13,7 +13,6 @@ import {
     PlusOutlined,
     LockOutlined,
 } from '@ant-design/icons'
-import { parseBooleanConfigValue } from '@/lib/configValueParsers'
 import { apiFetch } from '@/lib/utils'
 
 const SELECT_FIELDS: Record<string, { label: string; value: string }[]> = {
@@ -171,15 +170,8 @@ const TAB_ITEMS = [
             {
                 title: 'CF Worker 自建邮箱',
                 provider: 'cfworker',
-                desc: '基于 Cloudflare Worker 的自建临时邮箱服务',
-                fields: [
-                    { key: 'cfworker_api_url', label: 'API URL', placeholder: 'https://apimail.example.com' },
-                    { key: 'cfworker_admin_token', label: '管理员 Token', secret: true },
-                    { key: 'cfworker_custom_auth', label: '站点密码', secret: true },
-                    { key: 'cfworker_subdomain', label: '固定子域名', placeholder: 'mail / pool-a' },
-                    { key: 'cfworker_random_subdomain', label: '随机子域名', type: 'boolean' },
-                    { key: 'cfworker_fingerprint', label: 'Fingerprint', placeholder: '6703363b...' },
-                ],
+                desc: '多实例配置见下方「CF Worker 多实例管理」',
+                fields: [],
             },
             {
                 title: '阿里企业邮箱',
@@ -383,40 +375,7 @@ function formatResultText(data: unknown) {
     }
 }
 
-function normalizeDomainList(input: unknown): string[] {
-    const items = Array.isArray(input) ? input : []
-    const seen = new Set<string>()
-    const domains: string[] = []
-    for (const item of items) {
-        const domain = String(item || '').trim().toLowerCase().replace(/^@/, '')
-        if (!domain || seen.has(domain)) continue
-        seen.add(domain)
-        domains.push(domain)
-    }
-    return domains
-}
 
-function parseStoredDomainList(value: unknown): string[] {
-    if (Array.isArray(value)) return normalizeDomainList(value)
-    if (typeof value !== 'string') return []
-
-    const text = value.trim()
-    if (!text) return []
-
-    try {
-        const parsed = JSON.parse(text)
-        if (Array.isArray(parsed)) {
-            return normalizeDomainList(parsed)
-        }
-    } catch { }
-
-    return normalizeDomainList(
-        text
-            .split('\n')
-            .flatMap((line) => line.split(','))
-            .map((item) => item.trim()),
-    )
-}
 
 function ConfigField({ field }: { field: FieldConfig }) {
     const [showSecret, setShowSecret] = useState(false)
@@ -494,31 +453,55 @@ function MailboxSections({ form, sections }: { form: any; sections: SectionConfi
     )
 }
 
-function CFWorkerInstancesSection({ form }: { form: any }) {
-    const instances: any[] = Form.useWatch('cfworker_instances', form) || []
-    const strategy: string = Form.useWatch('cfworker_strategy', form) || 'random'
+function CFWorkerInstancesSection({
+    instances,
+    setInstances,
+    strategy,
+    setStrategy,
+    specifiedId,
+    setSpecifiedId,
+}: {
+    instances: any[]
+    setInstances: (v: any[]) => void
+    strategy: string
+    setStrategy: (v: string) => void
+    specifiedId: string
+    setSpecifiedId: (v: string) => void
+}) {
+    const [activeInstKey, setActiveInstKey] = useState<string | null>(
+        () => instances[0]?.id ?? null
+    )
+
+    const validKey = instances.length > 0
+        ? (instances.find((inst) => inst?.id === activeInstKey) ? activeInstKey : instances[0]?.id ?? null)
+        : null
+
+    const updateInst = (idx: number, patch: Record<string, any>) => {
+        setInstances(instances.map((inst, i) => i === idx ? { ...inst, ...patch } : inst))
+    }
 
     const addInstance = () => {
-        const current = Array.isArray(form.getFieldValue('cfworker_instances'))
-            ? [...form.getFieldValue('cfworker_instances')]
-            : []
         const newId = `inst_${Date.now()}`
-        form.setFieldValue('cfworker_instances', [
-            ...current,
-            { id: newId, name: `实例 ${current.length + 1}`, enabled: true, api_url: '', admin_token: '', custom_auth: '', subdomain: '', random_subdomain: false, fingerprint: '' },
-        ])
+        const newInst = {
+            id: newId,
+            name: `实例 ${instances.length + 1}`,
+            enabled: true,
+            api_url: '',
+            admin_token: '',
+            custom_auth: '',
+            domain: '',
+            subdomain: '',
+            random_subdomain: false,
+            fingerprint: '',
+        }
+        setInstances([...instances, newInst])
+        setActiveInstKey(newId)
     }
 
-    const removeInstance = (idx: number) => {
-        const current = [...(form.getFieldValue('cfworker_instances') || [])]
-        current.splice(idx, 1)
-        form.setFieldValue('cfworker_instances', current)
-    }
-
-    const toggleInstance = (idx: number, enabled: boolean) => {
-        const current = [...(form.getFieldValue('cfworker_instances') || [])]
-        current[idx] = { ...current[idx], enabled }
-        form.setFieldValue('cfworker_instances', current)
+    const removeInstance = (idx: number, id: string) => {
+        const next = instances.filter((_, i) => i !== idx)
+        setInstances(next)
+        if (validKey === id) setActiveInstKey(next[0]?.id ?? null)
     }
 
     const strategyOptions = [
@@ -529,262 +512,134 @@ function CFWorkerInstancesSection({ form }: { form: any }) {
 
     const enabledInstances = instances.filter((inst) => inst?.enabled)
 
+    const tabItems = instances.map((inst, idx) => ({
+        key: inst?.id ?? String(idx),
+        label: (
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{
+                    width: 7, height: 7, borderRadius: '50%',
+                    background: inst?.enabled ? '#10b981' : '#d9d9d9',
+                    flexShrink: 0, display: 'inline-block',
+                }} />
+                {inst?.name || `实例 ${idx + 1}`}
+            </span>
+        ),
+        children: (
+            <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <Space>
+                        <Switch
+                            size="small"
+                            checked={!!inst?.enabled}
+                            onChange={(checked) => updateInst(idx, { enabled: checked })}
+                            checkedChildren="启用"
+                            unCheckedChildren="禁用"
+                        />
+                        <Input
+                            variant="borderless"
+                            value={inst?.name ?? ''}
+                            placeholder={`实例 ${idx + 1}`}
+                            style={{ fontWeight: 500, width: 160 }}
+                            onChange={(e) => updateInst(idx, { name: e.target.value })}
+                        />
+                    </Space>
+                    <Button danger size="small" onClick={() => removeInstance(idx, inst?.id)}>
+                        删除此实例
+                    </Button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+                    {([
+                        ['api_url', 'API URL', 'https://apimail.example.com', false],
+                        ['admin_token', '管理员 Token', 'admin token', true],
+                        ['custom_auth', '站点密码', 'x-custom-auth（可选）', true],
+                        ['domain', '域名', 'mail.example.com', false],
+                        ['subdomain', '固定子域名', 'pool-a（可选）', false],
+                        ['fingerprint', 'Fingerprint', '6703363b...（可选）', false],
+                    ] as [string, string, string, boolean][]).map(([key, label, placeholder, secret]) => (
+                        <Form.Item key={key} label={label} style={{ marginBottom: 10 }}>
+                            {secret ? (
+                                <Input.Password
+                                    value={inst?.[key] ?? ''}
+                                    placeholder={placeholder}
+                                    onChange={(e) => updateInst(idx, { [key]: e.target.value })}
+                                />
+                            ) : (
+                                <Input
+                                    value={inst?.[key] ?? ''}
+                                    placeholder={placeholder}
+                                    onChange={(e) => updateInst(idx, { [key]: e.target.value })}
+                                />
+                            )}
+                        </Form.Item>
+                    ))}
+                </div>
+                <Form.Item label="随机子域名" style={{ marginBottom: 0 }}>
+                    <Switch
+                        checked={!!inst?.random_subdomain}
+                        onChange={(checked) => updateInst(idx, { random_subdomain: checked })}
+                        checkedChildren="开启"
+                        unCheckedChildren="关闭"
+                    />
+                </Form.Item>
+            </div>
+        ),
+    }))
+
     return (
         <Card
             title="CF Worker 多实例管理"
             extra={<span style={{ fontSize: 12, color: '#7a8ba3' }}>配置多个 CF Worker 实例，按策略分配使用</span>}
             style={{ marginBottom: 16 }}
         >
-            {/* 策略选择 */}
             <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>选取策略：</span>
-                    <Form.Item name="cfworker_strategy" style={{ margin: 0 }}>
-                        <Select options={strategyOptions} style={{ width: 140 }} />
-                    </Form.Item>
+                    <Select
+                        value={strategy}
+                        options={strategyOptions}
+                        style={{ width: 140 }}
+                        onChange={setStrategy}
+                    />
                 </div>
                 {strategy === 'specified' && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>指定实例：</span>
-                        <Form.Item name="cfworker_specified_id" style={{ margin: 0 }}>
-                            <Select
-                                style={{ width: 180 }}
-                                placeholder="选择实例"
-                                options={enabledInstances.map((inst) => ({
-                                    label: inst.name || inst.id,
-                                    value: inst.id,
-                                }))}
-                            />
-                        </Form.Item>
+                        <Select
+                            value={specifiedId || undefined}
+                            style={{ width: 200 }}
+                            placeholder="选择实例"
+                            options={enabledInstances.map((inst) => ({
+                                label: inst.name || inst.id,
+                                value: inst.id,
+                            }))}
+                            onChange={setSpecifiedId}
+                        />
                     </div>
                 )}
             </div>
 
-            {/* 实例列表 */}
-            <Form.List name="cfworker_instances">
-                {(fields) => (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                        {fields.map((field, idx) => {
-                            const inst = instances[idx] || {}
-                            return (
-                                <Card
-                                    key={field.key}
-                                    size="small"
-                                    style={{
-                                        border: inst.enabled ? '1px solid #4096ff' : '1px solid #d9d9d9',
-                                        opacity: inst.enabled ? 1 : 0.6,
-                                    }}
-                                    title={
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                            <Switch
-                                                size="small"
-                                                checked={!!inst.enabled}
-                                                onChange={(checked) => toggleInstance(idx, checked)}
-                                                checkedChildren="启用"
-                                                unCheckedChildren="禁用"
-                                            />
-                                            <Form.Item name={[field.name, 'name']} style={{ margin: 0, flex: 1 }}>
-                                                <Input
-                                                    variant="borderless"
-                                                    placeholder={`实例 ${idx + 1}`}
-                                                    style={{ fontWeight: 500, padding: '0 4px' }}
-                                                />
-                                            </Form.Item>
-                                        </div>
-                                    }
-                                    extra={
-                                        <Button danger size="small" onClick={() => removeInstance(idx)}>
-                                            删除
-                                        </Button>
-                                    }
-                                >
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
-                                        <Form.Item label="API URL" name={[field.name, 'api_url']} style={{ marginBottom: 8 }}>
-                                            <Input placeholder="https://apimail.example.com" />
-                                        </Form.Item>
-                                        <Form.Item label="管理员 Token" name={[field.name, 'admin_token']} style={{ marginBottom: 8 }}>
-                                            <Input.Password placeholder="admin token" />
-                                        </Form.Item>
-                                        <Form.Item label="站点密码" name={[field.name, 'custom_auth']} style={{ marginBottom: 8 }}>
-                                            <Input.Password placeholder="x-custom-auth（可选）" />
-                                        </Form.Item>
-                                        <Form.Item label="域名" name={[field.name, 'domain']} style={{ marginBottom: 8 }}>
-                                            <Input placeholder="mail.example.com" />
-                                        </Form.Item>
-                                        <Form.Item label="固定子域名" name={[field.name, 'subdomain']} style={{ marginBottom: 8 }}>
-                                            <Input placeholder="pool-a（可选）" />
-                                        </Form.Item>
-                                        <Form.Item label="Fingerprint" name={[field.name, 'fingerprint']} style={{ marginBottom: 8 }}>
-                                            <Input placeholder="6703363b...（可选）" />
-                                        </Form.Item>
-                                    </div>
-                                    <Form.Item
-                                        label="随机子域名"
-                                        name={[field.name, 'random_subdomain']}
-                                        valuePropName="checked"
-                                        style={{ marginBottom: 0 }}
-                                    >
-                                        <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-                                    </Form.Item>
-                                    {/* 隐藏 id 字段保持稳定 */}
-                                    <Form.Item name={[field.name, 'id']} hidden>
-                                        <Input />
-                                    </Form.Item>
-                                    <Form.Item name={[field.name, 'enabled']} hidden valuePropName="checked">
-                                        <Switch />
-                                    </Form.Item>
-                                </Card>
-                            )
-                        })}
-                        {fields.length === 0 && (
-                            <Typography.Text type="secondary">
-                                还没有实例。添加后可配置多个 CF Worker 端点，并设置上方策略。
-                            </Typography.Text>
-                        )}
-                    </div>
-                )}
-            </Form.List>
-
-            <Button
-                type="dashed"
-                icon={<PlusOutlined />}
-                block
-                style={{ marginTop: 12 }}
-                onClick={addInstance}
-            >
-                添加实例
-            </Button>
-
-            <Typography.Text type="secondary" style={{ display: 'block', marginTop: 12, fontSize: 12 }}>
-                多实例启用时按上方策略分配；未配置实例则回退到下方单实例配置（旧版兼容）。
-            </Typography.Text>
-        </Card>
-    )
-}
-
-function CFWorkerDomainPoolSection({ form }: { form: any }) {
-    const watchedDomains = Form.useWatch('cfworker_domains', form) || []
-    const watchedEnabledDomains = Form.useWatch('cfworker_enabled_domains', form) || []
-    const normalizedDomains = normalizeDomainList(watchedDomains)
-    const enabledDomains = normalizeDomainList(watchedEnabledDomains).filter((domain) => normalizedDomains.includes(domain))
-
-    const updateEnabledDomains = (nextDomains: string[]) => {
-        form.setFieldValue('cfworker_enabled_domains', normalizeDomainList(nextDomains))
-    }
-
-    const toggleEnabledDomain = (domain: string, checked: boolean) => {
-        if (checked) {
-            updateEnabledDomains([...enabledDomains, domain])
-            return
-        }
-        updateEnabledDomains(enabledDomains.filter((item) => item !== domain))
-    }
-
-    return (
-        <Card
-            title="CF Worker 域名池"
-            extra={<span style={{ fontSize: 12, color: '#7a8ba3' }}>注册时会从已启用域名中随机选择一个</span>}
-            style={{ marginBottom: 16 }}
-        >
-            <Form.List name="cfworker_domains">
-                {(fields, { add, remove }) => (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                        {fields.map((field) => (
-                            <Space key={field.key} align="start" style={{ display: 'flex' }}>
-                                <Form.Item
-                                    {...field}
-                                    label={field.name === 0 ? '全部域名' : ''}
-                                    style={{ flex: 1, marginBottom: 0 }}
-                                    rules={[
-                                        {
-                                            validator: async (_, value) => {
-                                                if (!String(value || '').trim()) {
-                                                    throw new Error('请输入域名')
-                                                }
-                                            },
-                                        },
-                                    ]}
-                                >
-                                    <Input placeholder="example.com" />
-                                </Form.Item>
-                                <Button
-                                    danger
-                                    onClick={() => {
-                                        const currentDomains = Array.isArray(form.getFieldValue('cfworker_domains'))
-                                            ? [...form.getFieldValue('cfworker_domains')]
-                                            : []
-                                        const removedDomain = String(currentDomains[field.name] || '').trim().toLowerCase().replace(/^@/, '')
-                                        remove(field.name)
-                                        if (!removedDomain) return
-                                        const enabledDomains = normalizeDomainList(form.getFieldValue('cfworker_enabled_domains'))
-                                        form.setFieldValue(
-                                            'cfworker_enabled_domains',
-                                            enabledDomains.filter((domain) => domain !== removedDomain),
-                                        )
-                                    }}
-                                >
-                                    删除
-                                </Button>
-                            </Space>
-                        ))}
-                        {fields.length === 0 ? (
-                            <Typography.Text type="secondary">还没有配置域名。添加后即可在下方选择启用项。</Typography.Text>
-                        ) : null}
-                        <Button type="dashed" onClick={() => add('')} icon={<PlusOutlined />} block>
-                            添加域名
+            {instances.length > 0 ? (
+                <Tabs
+                    type="card"
+                    activeKey={validKey ?? undefined}
+                    onChange={setActiveInstKey}
+                    items={tabItems}
+                    tabBarExtraContent={
+                        <Button type="dashed" size="small" icon={<PlusOutlined />} onClick={addInstance}>
+                            添加实例
+                        </Button>
+                    }
+                />
+            ) : (
+                <div style={{ textAlign: 'center', padding: '24px 0' }}>
+                    <Typography.Text type="secondary">还没有实例，点击下方按钮添加。</Typography.Text>
+                    <div style={{ marginTop: 12 }}>
+                        <Button type="dashed" icon={<PlusOutlined />} onClick={addInstance}>
+                            添加实例
                         </Button>
                     </div>
-                )}
-            </Form.List>
-
-            <Form.Item name="cfworker_enabled_domains" hidden>
-                <Select mode="multiple" options={normalizedDomains.map((domain) => ({ label: domain, value: domain }))} />
-            </Form.Item>
-
-            <div style={{ marginTop: 16 }}>
-                <div style={{ marginBottom: 8, fontWeight: 500 }}>已启用域名</div>
-                {enabledDomains.length > 0 ? (
-                    <Space wrap>
-                        {enabledDomains.map((domain) => (
-                            <Tag
-                                key={domain}
-                                color="blue"
-                                closable
-                                onClose={(event) => {
-                                    event.preventDefault()
-                                    updateEnabledDomains(enabledDomains.filter((item) => item !== domain))
-                                }}
-                            >
-                                {domain}
-                            </Tag>
-                        ))}
-                    </Space>
-                ) : (
-                    <Typography.Text type="secondary">暂无启用域名，点击下方域名即可启用。</Typography.Text>
-                )}
-            </div>
-
-            <div style={{ marginTop: 16 }}>
-                <div style={{ marginBottom: 8, fontWeight: 500 }}>点击切换启用状态</div>
-                {normalizedDomains.length > 0 ? (
-                    <Space wrap>
-                        {normalizedDomains.map((domain) => (
-                            <Tag.CheckableTag
-                                key={domain}
-                                checked={enabledDomains.includes(domain)}
-                                onChange={(checked) => toggleEnabledDomain(domain, checked)}
-                            >
-                                {domain}
-                            </Tag.CheckableTag>
-                        ))}
-                    </Space>
-                ) : (
-                    <Typography.Text type="secondary">请先在上方添加域名。</Typography.Text>
-                )}
-            </div>
-            <Typography.Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
-                仅已启用域名会参与注册；点击已启用标签可直接移除。
-            </Typography.Text>
+                </div>
+            )}
         </Card>
     )
 }
@@ -1277,34 +1132,31 @@ export default function Settings() {
     const [saving, setSaving] = useState(false)
     const [saved, setSaved] = useState(false)
     const [activeTab, setActiveTab] = useState('register')
+    // CF Worker 多实例独立 state（完全脱离 Form，避免 useWatch 循环覆盖）
+    const [cfInstances, setCfInstances] = useState<any[]>([])
+    const [cfStrategy, setCfStrategy] = useState('random')
+    const [cfSpecifiedId, setCfSpecifiedId] = useState('')
 
     useEffect(() => {
         apiFetch('/config').then((data) => {
-            if (!data.mail_provider) {
-                data.mail_provider = 'luckmail'
-            }
-            if (!data.gptmail_base_url) {
-                data.gptmail_base_url = 'https://mail.chatgpt.org.uk'
-            }
-            if (!data.maliapi_base_url) {
-                data.maliapi_base_url = 'https://maliapi.215.im/v1'
-            }
-            if (!data.luckmail_base_url) {
-                data.luckmail_base_url = 'https://mails.luckyous.com/'
-            }
-            data.cfworker_domains = parseStoredDomainList(data.cfworker_domains)
-            data.cfworker_enabled_domains = parseStoredDomainList(data.cfworker_enabled_domains)
-            data.cfworker_random_subdomain = parseBooleanConfigValue(data.cfworker_random_subdomain)
-            // 解析多实例配置
+            if (!data.mail_provider) data.mail_provider = 'luckmail'
+            if (!data.gptmail_base_url) data.gptmail_base_url = 'https://mail.chatgpt.org.uk'
+            if (!data.maliapi_base_url) data.maliapi_base_url = 'https://maliapi.215.im/v1'
+            if (!data.luckmail_base_url) data.luckmail_base_url = 'https://mails.luckyous.com/'
+            // 解析多实例配置 → 独立 state，不写入 form
+            let instances: any[] = []
             if (typeof data.cfworker_instances === 'string') {
-                try { data.cfworker_instances = JSON.parse(data.cfworker_instances) } catch { data.cfworker_instances = [] }
+                try { instances = JSON.parse(data.cfworker_instances) } catch { instances = [] }
+            } else if (Array.isArray(data.cfworker_instances)) {
+                instances = data.cfworker_instances
             }
-            if (!Array.isArray(data.cfworker_instances)) {
-                data.cfworker_instances = []
-            }
-            if (!data.cfworker_strategy) {
-                data.cfworker_strategy = 'random'
-            }
+            setCfInstances(instances)
+            setCfStrategy(data.cfworker_strategy || 'random')
+            setCfSpecifiedId(data.cfworker_specified_id || '')
+            // 从 data 中移除，不让 form 管理这几个 key
+            delete data.cfworker_instances
+            delete data.cfworker_strategy
+            delete data.cfworker_specified_id
             form.setFieldsValue(data)
         })
     }, [form])
@@ -1313,39 +1165,11 @@ export default function Settings() {
         setSaving(true)
         try {
             const values = form.getFieldsValue(true)
-            const domains = normalizeDomainList(values.cfworker_domains)
-            const enabledDomains = normalizeDomainList(values.cfworker_enabled_domains).filter((domain) => domains.includes(domain))
-
-            // 仅在没有多实例配置时才校验旧版域名池
-            const instances = Array.isArray(values.cfworker_instances) ? values.cfworker_instances.filter((inst: any) => inst?.enabled) : []
-            if (instances.length === 0 && domains.length > 0 && enabledDomains.length === 0) {
-                setActiveTab('mailbox')
-                message.error('CF Worker 至少需要启用一个域名')
-                return
-            }
-
-            values.cfworker_domains = JSON.stringify(domains)
-            values.cfworker_enabled_domains = JSON.stringify(enabledDomains)
-            if (domains.length > 0) {
-                values.cfworker_domain = ''
-            }
-            values.cfworker_random_subdomain = parseBooleanConfigValue(values.cfworker_random_subdomain)
-
-            // 序列化多实例配置
-            if (Array.isArray(values.cfworker_instances)) {
-                values.cfworker_instances = JSON.stringify(values.cfworker_instances)
-            }
-
+            // 注入独立 state 的 CF Worker 数据
+            values.cfworker_instances = JSON.stringify(cfInstances)
+            values.cfworker_strategy = cfStrategy
+            values.cfworker_specified_id = cfSpecifiedId
             await apiFetch('/config', { method: 'PUT', body: JSON.stringify({ data: values }) })
-            form.setFieldsValue({
-                cfworker_domains: domains,
-                cfworker_enabled_domains: enabledDomains,
-                cfworker_domain: domains.length > 0 ? '' : values.cfworker_domain,
-                cfworker_random_subdomain: values.cfworker_random_subdomain,
-                cfworker_instances: Array.isArray(values.cfworker_instances)
-                    ? values.cfworker_instances
-                    : (() => { try { return JSON.parse(values.cfworker_instances) } catch { return [] } })(),
-            })
             message.success('保存成功')
             setSaved(true)
             setTimeout(() => setSaved(false), 2000)
@@ -1394,10 +1218,14 @@ export default function Settings() {
                                 <>
                                     <MailboxSections form={form} sections={currentTab.sections} />
                                     {selectedMailProvider === 'cfworker' ? (
-                                        <>
-                                            <CFWorkerInstancesSection form={form} />
-                                            <CFWorkerDomainPoolSection form={form} />
-                                        </>
+                                        <CFWorkerInstancesSection
+                                            instances={cfInstances}
+                                            setInstances={setCfInstances}
+                                            strategy={cfStrategy}
+                                            setStrategy={setCfStrategy}
+                                            specifiedId={cfSpecifiedId}
+                                            setSpecifiedId={setCfSpecifiedId}
+                                        />
                                     ) : null}
                                 </>
                             ) : (
