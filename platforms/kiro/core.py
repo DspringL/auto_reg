@@ -798,10 +798,9 @@ class KiroRegister:
                 ).first
                 if email_input.count() > 0 and email_input.is_visible():
                     self.log("桌面授权页要求重新登录，正在填写 Email ...")
-                    email_input.click()
-                    email_input.fill(email)
+                    self._type_like_human(page, email_input, email)
                     self._click_primary_button(page)
-                    self._human_sleep(0.7, 1.4)
+                    self._human_sleep(1.0, 3.0)
         except Exception:
             pass
 
@@ -1016,10 +1015,13 @@ class KiroRegister:
                 'input[placeholder="username@example.com"], input[type="email"]'
             ).first
             email_input.wait_for(state="visible", timeout=15000)
-            email_input.click()
-            email_input.fill(email)
+            self._type_like_human(
+                page,
+                'input[placeholder="username@example.com"], input[type="email"]',
+                email,
+            )
             self._click_primary_button(page)
-            self._human_sleep(1.1, 2.4)
+            self._human_sleep(1.0, 3.0)
             self._solve_captcha_if_exists(page)
 
             # 2. 等待邮箱后的实际下一步（某些 AWS 页面会延迟很久才出现姓名输入框）
@@ -1037,7 +1039,7 @@ class KiroRegister:
                 self.log("2. 填写名字 (Your name)...")
                 self._type_like_human(page, stage_input, name)
                 self._click_primary_button(page)
-                self._human_sleep(1.1, 2.4)
+                self._human_sleep(1.0, 3.0)
 
                 self.log("3. 等待触发 OTP...")
                 otp_ready, otp_wait_error, otp_input = self._wait_for_otp_step(
@@ -1060,7 +1062,7 @@ class KiroRegister:
             self.log(f"获取到验证码: {otp_code}，正在填入...")
             self._type_like_human(page, otp_input, otp_code)
             self._click_primary_button(page)
-            self._human_sleep(1.0, 2.2)
+            self._human_sleep(1.0, 3.0)
 
             # 4. 设定与确认密码
             self.log("4. 设定与确认密码...")
@@ -1071,9 +1073,8 @@ class KiroRegister:
                 return False, {"error": f"OTP 提交后未通过: {otp_error}"}
 
             self._fill_password_fields(page, pwd)
-
             self._click_primary_button(page)
-            self._human_sleep(1.3, 2.8)
+            self._human_sleep(1.0, 3.0)
             self._solve_captcha_if_exists(page)
 
             password_error = self._get_first_visible_text(
