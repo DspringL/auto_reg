@@ -285,8 +285,13 @@ class KiroPlatform(BasePlatform):
 
         elif action_id == "upload_kiro_manager":
             from platforms.kiro.account_manager_upload import upload_to_kiro_manager
-
-            ok, msg = upload_to_kiro_manager(account)
+            import copy
+            # 手动导入不受封禁检测影响，强制以 active 状态写入
+            acc_copy = copy.deepcopy(account)
+            acc_copy.status = AccountStatus.REGISTERED
+            if isinstance(acc_copy.extra, dict):
+                acc_copy.extra.pop("ban_detail", None)
+            ok, msg = upload_to_kiro_manager(acc_copy)
             return {"ok": ok, "data": {"message": msg}}
 
         raise NotImplementedError(f"未知操作: {action_id}")

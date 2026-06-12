@@ -215,6 +215,13 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 saved_account = save_account(account)
                 if _proxy:
                     proxy_pool.report_success(_proxy)
+                # 封禁账号计入失败
+                ban_detail = (account.extra or {}).get("ban_detail", "")
+                if ban_detail:
+                    _log(task_id, f"[FAIL] 注册成功但账号被封禁: {account.email}")
+                    _save_task_log(req.platform, account.email, "failed", error=f"banned: {ban_detail}")
+                    _auto_upload_integrations(task_id, saved_account or account)
+                    return f"banned: {ban_detail}"
                 _log(task_id, f"[OK] 注册成功: {account.email}")
                 _save_task_log(req.platform, account.email, "success")
                 _auto_upload_integrations(task_id, saved_account or account)
