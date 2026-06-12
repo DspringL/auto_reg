@@ -65,7 +65,7 @@ class KiroPlatform(BasePlatform):
         if not ok:
             raise RuntimeError(f"Kiro 注册失败: {info.get('error')}")
 
-        return Account(
+        account = Account(
             platform="kiro",
             email=info["email"],
             password=info["password"],
@@ -84,6 +84,33 @@ class KiroPlatform(BasePlatform):
                 "authMethod": "IdC",
             },
         )
+
+        # 注册完成后检测账号是否被封禁，结果写入 extra 供 external_sync 判断
+        access_token = info.get("accessToken", "")
+        region = info.get("region", "us-east-1")
+        if access_token:
+            from platforms.kiro.switch import check_kiro_account_banned
+            # 代理：只使用 .env 中的 PROXY_URL，不走代理池
+            detect_proxy = config_store.get("PROXY_URL", "") or config_store.get("proxy_url", "") or None
+            log_fn(f"【封禁检测】开始检测账号状态...（代理: {detect_proxy or '直连'}）")
+            try:
+                is_banned, detail = check_kiro_account_banned(
+                    access_token=access_token,
+                    region=region,
+                    proxy=detect_proxy,
+                )
+                if is_banned:
+                    log_fn(f"【封禁检测】⚠️  账号已被封禁！详情: {detail}")
+                    account.status = AccountStatus.INVALID
+                    account.extra["ban_detail"] = detail
+                else:
+                    log_fn(f"【封禁检测】✅ 账号状态正常。详情: {detail}")
+            except Exception as e:
+                log_fn(f"【封禁检测】检测异常（跳过，不影响导入）: {e}")
+        else:
+            log_fn("【封禁检测】缺少 accessToken，跳过检测")
+
+        return account
 
     def check_valid(self, account: Account) -> bool:
         """通过 refreshToken 检测账号是否有效"""

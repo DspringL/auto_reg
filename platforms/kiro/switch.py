@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 OIDC_ENDPOINT = "https://oidc.us-east-1.amazonaws.com"
 BUILDER_ID_START_URL = "https://view.awsapps.com/start"
 DEFAULT_PROFILE_ARN = "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK"
+KIRO_BUILDER_ID_PROFILE_ARN = "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX"
+KIRO_SOCIAL_PROFILE_ARN = "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK"
 
 
 def _calculate_client_id_hash(start_url: str) -> str:
@@ -216,3 +218,124 @@ def read_current_kiro_account() -> dict | None:
             return json.load(f)
     except Exception:
         return None
+
+
+def _build_q_service_url(region: str = "us-east-1") -> str:
+    return f"https://q.{region}.amazonaws.com"
+
+
+def _kiro_q_headers(access_token: str, machine_id: str) -> dict:
+    import uuid as _uuid
+    user_agent = f"aws-sdk-rust/1.3.9 ua/2.1 api/CodeWhispererStreaming#2.4.0 os/macOS#14.0 lang/rust#1.85.0 md/Kiro#0.0.1 m/E"
+    invocation_id = str(_uuid.uuid4())
+    return {
+        "Authorization": f"Bearer {access_token}",
+        "user-agent": user_agent,
+        "x-amz-user-agent": user_agent,
+        "amz-sdk-invocation-id": invocation_id,
+        "amz-sdk-request": "attempt=1; max=1",
+        "accept": "application/json",
+    }
+
+
+def _classify_kiro_q_error(api: str, status_code: int, body: str) -> str:
+    """与 kiro-account-manager classify_kiro_q_error 逻辑对应"""
+    import json as _json
+    if status_code == 401:
+        return f"AUTH_ERROR: {api} 401: {body}"
+    if status_code == 403:
+        body_lower = body.lower()
+        try:
+            parsed = _json.loads(body)
+            reason = parsed.get("reason", "")
+            if reason == "TemporarilySuspended":
+                message = parsed.get("message", "账号已被封禁")
+                return f"BANNED: {message}"
+        except Exception:
+            pass
+        if "suspended" in body_lower:
+            return f"BANNED: {body}"
+        return f"AUTH_ERROR: {api} 403: {body}"
+    if status_code == 423:
+        return f"BANNED: Account suspended (423) - {body}"
+    return f"{api} failed - HTTP {status_code}: {body}"
+
+
+def check_kiro_account_banned(
+    access_token: str,
+    region: str = "us-east-1",
+    proxy: str = None,
+) -> Tuple[bool, str]:
+    """
+    检测 Kiro 账号是否被封禁。
+
+    与 kiro-account-manager get_usage_by_provider_for_new_account 逻辑一致：
+    1. 调用 getUsageLimits 接口（随机 machine_id，避免批量注册关联）
+    2. 若 getUsageLimits 成功，再调 ListAvailableModels 做二次封禁检测
+       （某些封禁状态下 getUsageLimits 正常返回，但 ListAvailableModels 返回 403）
+
+    Returns:
+        (is_banned: bool, detail: str)
+        is_banned=True  表示封禁，detail 包含封禁原因
+        is_banned=False 表示正常，detail 为 "active" 或错误描述
+    """
+    import uuid as _uuid
+
+    random_machine_id = str(_uuid.uuid4()).lower()
+    profile_arn = KIRO_BUILDER_ID_PROFILE_ARN
+
+    proxies = None
+    if proxy:
+        proxies = {"http": proxy, "https": proxy}
+
+    base_url = _build_q_service_url(region)
+    headers = _kiro_q_headers(access_token, random_machine_id)
+
+    # Step 1: getUsageLimits
+    usage_url = (
+        f"{base_url}/getUsageLimits"
+        f"?isEmailRequired=true&origin=AI_EDITOR"
+        f"&profileArn={profile_arn}"
+        f"&resourceType=AGENTIC_REQUEST"
+    )
+    try:
+        resp = cffi_requests.get(
+            usage_url, headers=headers,
+            proxies=proxies, timeout=20,
+            impersonate="chrome131",
+        )
+        status = resp.status_code
+        body = resp.text or ""
+    except Exception as e:
+        return False, f"getUsageLimits 请求失败: {e}"
+
+    if status != 200:
+        err = _classify_kiro_q_error("getUsageLimits", status, body[:500])
+        is_banned = err.startswith("BANNED:")
+        return is_banned, err
+
+    # getUsageLimits 成功 → Step 2: ListAvailableModels 二次封禁检测
+    # 某些封禁状态下 getUsageLimits 正常返回，但 ListAvailableModels 返回 403
+    models_url = (
+        f"{base_url}/ListAvailableModels"
+        f"?origin=AI_EDITOR&maxResults=50"
+        f"&profileArn={profile_arn}"
+    )
+    try:
+        resp2 = cffi_requests.get(
+            models_url, headers=headers,
+            proxies=proxies, timeout=20,
+            impersonate="chrome131",
+        )
+        status2 = resp2.status_code
+        body2 = resp2.text or ""
+    except Exception as e:
+        return False, f"active (ListAvailableModels 请求异常: {e})"
+
+    if status2 != 200:
+        err2 = _classify_kiro_q_error("ListAvailableModels", status2, body2[:500])
+        if err2.startswith("BANNED:"):
+            return True, err2
+        return False, f"active (ListAvailableModels HTTP {status2}: {body2[:200]})"
+
+    return False, "active"

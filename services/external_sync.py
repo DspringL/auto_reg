@@ -92,6 +92,13 @@ def sync_account(account) -> list[dict[str, Any]]:
     elif platform == "kiro":
         from platforms.kiro.account_manager_upload import resolve_manager_path, upload_to_kiro_manager
 
+        # 封禁账号不导入 Kiro Manager
+        extra = getattr(account, "extra", {}) or {}
+        ban_detail = extra.get("ban_detail", "")
+        if ban_detail:
+            results.append({"name": "Kiro Manager", "ok": False, "msg": f"账号已被封禁，跳过导入: {ban_detail}"})
+            return results
+
         configured_path = str(config_store.get("kiro_manager_path", "") or "").strip()
         target_path = resolve_manager_path(configured_path or None)
         if configured_path or target_path.parent.exists() or target_path.exists():
