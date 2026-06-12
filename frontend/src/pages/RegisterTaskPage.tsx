@@ -11,6 +11,7 @@ import {
     Space,
     Typography,
     Descriptions,
+    Switch,
 } from 'antd'
 import {
     PlayCircleOutlined,
@@ -32,6 +33,7 @@ export default function RegisterTaskPage() {
     const [form] = Form.useForm()
     const [task, setTask] = useState<any>(null)
     const [polling, setPolling] = useState(false)
+    const [semiAuto, setSemiAuto] = useState(false)
     const { mode: chatgptRegistrationMode, setMode: setChatgptRegistrationMode } =
         usePersistentChatGPTRegistrationMode()
 
@@ -172,19 +174,23 @@ export default function RegisterTaskPage() {
             ? chatgptRegistrationRequestAdapter.extendExtra(registerExtra)
             : registerExtra
 
+        // 半自动模式：强制 count=1，concurrency=1，传入 semi_auto 标记
+        const isSemiAuto = semiAuto && values.platform === 'kiro'
+        const finalExtra = isSemiAuto ? { ...adaptedRegisterExtra, semi_auto: '1' } : adaptedRegisterExtra
+
         const res = await apiFetch('/tasks/register', {
             method: 'POST',
             body: JSON.stringify({
                 platform: values.platform,
                 email: values.email || null,
                 password: values.password || null,
-                count: values.count,
-                concurrency: values.concurrency,
+                count: isSemiAuto ? 1 : values.count,
+                concurrency: isSemiAuto ? 1 : values.concurrency,
                 register_delay_seconds: values.register_delay_seconds || 0,
                 proxy: values.proxy || null,
                 executor_type: values.executor_type,
                 captcha_solver: values.captcha_solver,
-                extra: adaptedRegisterExtra,
+                extra: finalExtra,
             }),
         })
         setTask(res)
@@ -289,9 +295,32 @@ export default function RegisterTaskPage() {
                             />
                         </Form.Item>
                     )}
+                    {platform === 'kiro' && (
+                        <Form.Item
+                            label="半自动模式"
+                            extra="开启后：邮箱需手动填写，验证码由弹窗输入，自动禁用并发（count=1, concurrency=1）"
+                        >
+                            <Switch
+                                checked={semiAuto}
+                                onChange={setSemiAuto}
+                                checkedChildren="半自动"
+                                unCheckedChildren="全自动"
+                            />
+                        </Form.Item>
+                    )}
+                    {platform === 'kiro' && semiAuto && (
+                        <Form.Item
+                            name="email"
+                            label="注册邮箱"
+                            rules={[{ required: true, message: '半自动模式需填写邮箱' }, { type: 'email', message: '请填写有效邮箱' }]}
+                            extra="半自动模式只注册 1 个账号，验证码到达时会弹窗提示"
+                        >
+                            <Input placeholder="your@email.com" />
+                        </Form.Item>
+                    )}
                 </Card>
 
-                <Card title="邮箱配置" style={{ marginBottom: 16 }}>
+                <Card title="邮箱配置" style={{ marginBottom: 16, display: platform === 'kiro' && semiAuto ? 'none' : undefined }}>
                     <Form.Item name="mail_provider" label="邮箱服务" rules={[{ required: true }]}>
                         <Select
                             options={[

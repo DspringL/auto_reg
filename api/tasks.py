@@ -179,6 +179,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 _mailbox = _build_mailbox(_proxy)
                 _platform = PlatformCls(config=_config, mailbox=_mailbox)
                 _platform._log_fn = lambda msg: _log(task_id, msg)
+                _platform._task_id = task_id
                 if getattr(_platform, "mailbox", None) is not None:
                     _platform.mailbox._log_fn = _platform._log_fn
                 with _tasks_lock:
@@ -565,6 +566,23 @@ def stop_task(task_id: str):
         task.setdefault("control", {})["stop_requested"] = True
         _log(task_id, "[STOP] 用户请求停止任务，等待当前线程完成...")
     return {"ok": True, "message": "已发送停止请求"}
+
+
+class OtpSubmitRequest(BaseModel):
+    slot: str   # OTP slot ID，标识是哪个账号在等待
+    code: str   # 用户输入的验证码
+
+
+@router.post("/{task_id}/submit-otp")
+def submit_otp(task_id: str, body: OtpSubmitRequest):
+    """半自动模式：用户提交验证码"""
+    with _tasks_lock:
+        if task_id not in _tasks:
+            raise HTTPException(404, "任务不存在")
+        task = _tasks[task_id]
+        otp_slots = task.setdefault("otp_slots", {})
+        otp_slots[body.slot] = body.code.strip()
+    return {"ok": True}
 
 
 @router.get("")

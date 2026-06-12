@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Button, message, Space } from 'antd'
+import { Button, Input, message, Modal, Space } from 'antd'
 import { CopyOutlined, FastForwardOutlined, StopOutlined } from '@ant-design/icons'
 
 import { API_BASE, apiFetch, getToken } from '@/lib/utils'
@@ -18,11 +18,50 @@ export function TaskLogPanel({ taskId, onDone }: TaskLogPanelProps) {
   const [skipLoading, setSkipLoading] = useState(false)
   const [stopLoading, setStopLoading] = useState(false)
   const [stopRequested, setStopRequested] = useState(false)
+  // OTP 弹窗状态
+  const [otpSlot, setOtpSlot] = useState<string | null>(null)
+  const [otpHint, setOtpHint] = useState('')
+  const [otpCode, setOtpCode] = useState('')
+  const [otpSubmitting, setOtpSubmitting] = useState(false)
+  const pendingSlotsRef = useRef<Set<string>>(new Set())
+
   const panelRef = useRef<HTMLDivElement>(null)
   const onDoneRef = useRef(onDone)
   const nextSinceRef = useRef(0)
 
   const isFinished = terminalStatus !== 'idle' || stopRequested
+
+  // 检测新日志行中的 OTP_REQUIRED 标记
+  const checkOtpRequired = (line: string) => {
+    const match = line.match(/\[OTP_REQUIRED:([a-f0-9]+)\](.*)/)
+    if (match) {
+      const slot = match[1]
+      if (!pendingSlotsRef.current.has(slot)) {
+        pendingSlotsRef.current.add(slot)
+        setOtpSlot(slot)
+        setOtpCode('')
+        setOtpHint(match[2]?.trim() || '请输入邮箱收到的 6 位验证码')
+      }
+    }
+  }
+
+  const handleOtpSubmit = async () => {
+    if (!otpSlot || !otpCode.trim()) return
+    setOtpSubmitting(true)
+    try {
+      await apiFetch(`/tasks/${taskId}/submit-otp`, {
+        method: 'POST',
+        body: JSON.stringify({ slot: otpSlot, code: otpCode.trim() }),
+      })
+      message.success('验证码已提交')
+      setOtpSlot(null)
+      setOtpCode('')
+    } catch (e: any) {
+      message.error(e?.message || '提交失败')
+    } finally {
+      setOtpSubmitting(false)
+    }
+  }
 
   const handleCopyAll = async () => {
     try {
@@ -100,6 +139,10 @@ export function TaskLogPanel({ taskId, onDone }: TaskLogPanelProps) {
         const snapshotLines = Array.isArray(snapshot.logs) ? snapshot.logs : []
         setLines(snapshotLines)
         nextSinceRef.current = snapshotLines.length
+        // 检测快照中的 OTP 标记（任务已在等待中）
+        for (const line of snapshotLines) {
+          checkOtpRequired(line)
+        }
         setStopRequested(Boolean(snapshot.control?.stop_requested))
 
         if (snapshot.status === 'done' || snapshot.status === 'failed' || snapshot.status === 'stopped') {
@@ -163,6 +206,7 @@ export function TaskLogPanel({ taskId, onDone }: TaskLogPanelProps) {
               if (payload.line) {
                 nextSinceRef.current += 1
                 setLines((previous) => [...previous, payload.line!])
+                checkOtpRequired(payload.line!)
               }
               if (payload.done) {
                 setTerminalStatus(payload.status || 'done')
@@ -224,6 +268,28 @@ export function TaskLogPanel({ taskId, onDone }: TaskLogPanelProps) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* OTP 验证码弹窗 */}
+      <Modal
+        open={!!otpSlot}
+        title="请输入验证码"
+        onOk={handleOtpSubmit}
+        onCancel={() => { setOtpSlot(null); setOtpCode('') }}
+        okText="提交"
+        cancelText="取消"
+        confirmLoading={otpSubmitting}
+        okButtonProps={{ disabled: !otpCode.trim() }}
+      >
+        <p style={{ marginBottom: 12, color: '#6b7280', fontSize: 13 }}>{otpHint}</p>
+        <Input
+          autoFocus
+          placeholder="请输入 6 位验证码"
+          maxLength={6}
+          value={otpCode}
+          onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+          onPressEnter={handleOtpSubmit}
+          style={{ letterSpacing: 6, textAlign: 'center', fontSize: 20, fontWeight: 'bold' }}
+        />
+      </Modal>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
         <Space>
           <Button

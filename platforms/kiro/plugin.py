@@ -1,4 +1,5 @@
 """Kiro 平台插件 - 基于 AWS Builder ID 注册"""
+import time
 from core.base_platform import BasePlatform, Account, AccountStatus, RegisterConfig
 from core.base_mailbox import BaseMailbox
 from core.registry import register
@@ -20,6 +21,7 @@ class KiroPlatform(BasePlatform):
 
         proxy = self.config.proxy
         laoudo_account_id = self.config.extra.get("laoudo_account_id", "")
+        semi_auto = str(self.config.extra.get("semi_auto", "")).strip() in ("1", "true", "yes")
 
         # 从全局配置读取执行器类型，以决定是否无头模式
         default_executor = self.config.extra.get(
@@ -32,9 +34,31 @@ class KiroPlatform(BasePlatform):
         log_fn = getattr(self, '_log_fn', print)
         reg.log = lambda msg: log_fn(msg)
 
-        otp_timeout = int(self.config.extra.get("otp_timeout", 120))
+        otp_timeout = int(self.config.extra.get("otp_timeout", 300))
 
-        if self.mailbox:
+        if semi_auto:
+            # 半自动模式：通过前端弹窗让用户手动输入验证码
+            import uuid as _uuid
+            task_id = getattr(self, '_task_id', None)
+            slot = str(_uuid.uuid4())[:8]
+
+            def otp_cb():
+                # 发送特殊日志标记，前端检测到后弹出输入框
+                log_fn(f"[OTP_REQUIRED:{slot}] 请在弹窗中输入邮箱 {email} 收到的 6 位验证码（等待最多 {otp_timeout} 秒）")
+                deadline = time.time() + otp_timeout
+                while time.time() < deadline:
+                    if task_id:
+                        from api.tasks import _tasks, _tasks_lock
+                        with _tasks_lock:
+                            code = _tasks.get(task_id, {}).get("otp_slots", {}).get(slot)
+                        if code:
+                            log_fn(f"收到用户输入验证码: {code}")
+                            return code
+                    time.sleep(1)
+                log_fn("[OTP_REQUIRED_TIMEOUT] 等待验证码超时")
+                return None
+
+        elif self.mailbox:
             mail_acct = self.mailbox.get_email()
             email = email or mail_acct.email
             log_fn(f"邮箱: {mail_acct.email}")

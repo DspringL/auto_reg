@@ -16,6 +16,7 @@ import {
   Typography,
   Alert,
   theme,
+  Switch,
 } from 'antd'
 import type { MenuProps } from 'antd'
 import {
@@ -507,6 +508,7 @@ export default function Accounts() {
   const [importLoading, setImportLoading] = useState(false)
   const [taskId, setTaskId] = useState<string | null>(null)
   const [registerLoading, setRegisterLoading] = useState(false)
+  const [semiAuto, setSemiAuto] = useState(false)
   const [cpaSyncLoading, setCpaSyncLoading] = useState<'pending' | 'selected' | ''>('')
   const [statusSyncLoading, setStatusSyncLoading] = useState<'probe_selected' | 'probe_all' | 'remote_selected' | 'remote_all' | ''>('')
 
@@ -681,17 +683,21 @@ export default function Accounts() {
         ? chatgptRegistrationRequestAdapter.extendExtra(registerExtra)
         : registerExtra
 
+      const isSemiAuto = currentPlatform === 'kiro' && semiAuto
+      const finalExtra = isSemiAuto ? { ...adaptedRegisterExtra, semi_auto: '1' } : adaptedRegisterExtra
+
       const res = await apiFetch('/tasks/register', {
         method: 'POST',
         body: JSON.stringify({
           platform: currentPlatform,
-          count: values.count,
-          concurrency: values.concurrency,
+          email: isSemiAuto ? (values.semi_auto_email || null) : null,
+          count: isSemiAuto ? 1 : values.count,
+          concurrency: isSemiAuto ? 1 : values.concurrency,
           register_delay_seconds: values.register_delay_seconds || 0,
           executor_type: executorType,
           captcha_solver: cfg.default_captcha_solver || 'yescaptcha',
           proxy: null,
-          extra: adaptedRegisterExtra,
+          extra: finalExtra,
         }),
       })
       setTaskId(res.task_id)
@@ -1221,19 +1227,23 @@ export default function Accounts() {
       <Modal
         title={`注册 ${currentPlatform}`}
         open={registerModalOpen}
-        onCancel={() => { setRegisterModalOpen(false); setTaskId(null); registerForm.resetFields(); }}
+        onCancel={() => { setRegisterModalOpen(false); setTaskId(null); registerForm.resetFields(); setSemiAuto(false); }}
         footer={null}
         width={500}
         maskClosable={false}
       >
         {!taskId ? (
           <Form form={registerForm} layout="vertical" onFinish={handleRegister}>
-            <Form.Item name="count" label="注册数量" initialValue={1} rules={[{ required: true }]}>
-              <Input type="number" min={1} />
-            </Form.Item>
-            <Form.Item name="concurrency" label="并发数" initialValue={1} rules={[{ required: true }]}>
-              <Input type="number" min={1} max={5} />
-            </Form.Item>
+            {!(currentPlatform === 'kiro' && semiAuto) && (
+              <>
+                <Form.Item name="count" label="注册数量" initialValue={1} rules={[{ required: true }]}>
+                  <Input type="number" min={1} />
+                </Form.Item>
+                <Form.Item name="concurrency" label="并发数" initialValue={1} rules={[{ required: true }]}>
+                  <Input type="number" min={1} max={5} />
+                </Form.Item>
+              </>
+            )}
             <Form.Item name="register_delay_seconds" label="每个注册延迟(秒)" initialValue={0}>
               <InputNumber min={0} precision={1} step={0.5} style={{ width: '100%' }} placeholder="0 = 不延迟" />
             </Form.Item>
@@ -1244,6 +1254,33 @@ export default function Accounts() {
                   onChange={setChatgptRegistrationMode}
                 />
               </Form.Item>
+            )}
+            {currentPlatform === 'kiro' && (
+              <>
+                <Form.Item
+                  label="半自动模式"
+                  extra="开启后只注册 1 个账号，验证码需用户手动输入"
+                >
+                  <Switch
+                    checked={semiAuto}
+                    onChange={(v) => { setSemiAuto(v); registerForm.setFieldsValue({ count: 1, concurrency: 1 }) }}
+                    checkedChildren="半自动"
+                    unCheckedChildren="全自动"
+                  />
+                </Form.Item>
+                {semiAuto && (
+                  <Form.Item
+                    name="semi_auto_email"
+                    label="注册邮箱"
+                    rules={[
+                      { required: true, message: '半自动模式需填写邮箱' },
+                      { type: 'email', message: '请输入有效邮箱' },
+                    ]}
+                  >
+                    <Input placeholder="your@email.com" />
+                  </Form.Item>
+                )}
+              </>
             )}
             <Form.Item>
               <Button type="primary" htmlType="submit" block loading={registerLoading}>
