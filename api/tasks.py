@@ -182,6 +182,9 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 _platform._task_id = task_id
                 if getattr(_platform, "mailbox", None) is not None:
                     _platform.mailbox._log_fn = _platform._log_fn
+                # 将平台实例注册到任务中，供停止时强制关闭浏览器
+                with _tasks_lock:
+                    _tasks[task_id].setdefault("_active_platforms", {})[i] = _platform
                 with _tasks_lock:
                     _tasks[task_id]["progress"] = f"{i+1}/{req.count}"
                 _log(task_id, f"开始注册第 {i+1}/{req.count} 个账号")
@@ -236,11 +239,15 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
             except Exception as e:
                 if _proxy:
                     proxy_pool.report_fail(_proxy)
-                _log(task_id, f"[FAIL] 注册失败: {e}")
+                err_str = str(e)
+                _log(task_id, f"[FAIL] 注册失败: {err_str}")
                 _save_task_log(req.platform, req.email or "",
-                               "failed", error=str(e))
-                return str(e)
+                               "failed", error=err_str)
+                return err_str
             finally:
+                # 注册完成（无论成败），从活跃平台列表中移除
+                with _tasks_lock:
+                    _tasks.get(task_id, {}).get("_active_platforms", {}).pop(i, None)
                 if _mailbox is not None:
                     try:
                         _mailbox.cleanup()
@@ -379,7 +386,7 @@ async def stream_logs(task_id: str, since: int = 0):
             while sent < len(logs):
                 yield f"data: {json.dumps({'line': logs[sent]})}\n\n"
                 sent += 1
-            if status in ("done", "failed"):
+            if status in ("done", "failed", "stopped"):
                 yield f"data: {json.dumps({'done': True, 'status': status})}\n\n"
                 break
             await asyncio.sleep(0.5)
@@ -564,8 +571,28 @@ def stop_task(task_id: str):
         if task.get("status") != "running":
             raise HTTPException(400, "任务未在运行")
         task.setdefault("control", {})["stop_requested"] = True
-        _log(task_id, "[STOP] 用户请求停止任务，等待当前线程完成...")
-    return {"ok": True, "message": "已发送停止请求"}
+        # 拷贝当前活跃平台列表，在锁外关闭浏览器，避免死锁
+        active_platforms = list(task.get("_active_platforms", {}).values())
+        _log(task_id, f"[STOP] 用户请求停止任务，正在中断 {len(active_platforms)} 个进行中的注册...")
+
+    # 在锁外强制关闭所有正在运行的 Playwright 浏览器
+    for platform in active_platforms:
+        try:
+            # 通用接口：调用 _task_control 的 request_stop（如果平台支持）
+            task_control = getattr(platform, "_task_control", None)
+            if task_control and hasattr(task_control, "request_stop"):
+                task_control.request_stop()
+            # Kiro 平台特化：直接关闭 KiroRegister 的浏览器
+            _reg = getattr(platform, "_active_register", None)
+            if _reg is not None and hasattr(_reg, "_close_browser"):
+                try:
+                    _reg._close_browser()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    return {"ok": True, "message": "已发送停止请求，正在中断当前注册流程"}
 
 
 class OtpSubmitRequest(BaseModel):

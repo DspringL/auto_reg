@@ -192,9 +192,17 @@ class KiroRegister:
         return f"{base} {suffix}"
 
     def _random_chrome_version(self) -> str:
-        major = random.randint(130, 136)
-        build = random.randint(6400, 7399)
-        patch = random.randint(40, 220)
+        # 覆盖当前主流版本，避免使用过旧版本暴露指纹
+        major = random.randint(134, 137)
+        build_map = {
+            134: (6998, 7099),
+            135: (7049, 7269),
+            136: (7103, 7103),
+            137: (7151, 7151),
+        }
+        build_range = build_map.get(major, (7000, 7200))
+        build = random.randint(*build_range)
+        patch = random.randint(40, 250)
         return f"{major}.0.{build}.{patch}"
 
     def _build_random_profile(self) -> dict:
@@ -209,9 +217,20 @@ class KiroRegister:
         height = max(700, base_h + random.randint(-54, 54))
 
         if ua_tmpl["name"] == "mac_chrome":
-            os_minor = random.choice([14, 15, 16])
-            user_agent = ua_tmpl["template"].format(
-                ver=chrome_ver, minor=os_minor)
+            # macOS 10_x → 14.x / 15.x 更真实的版本分布
+            os_ver = random.choices(
+                ["10_15_7", "14_0", "14_1", "14_2", "14_3", "14_4",
+                 "15_0", "15_1", "15_2", "15_3"],
+                weights=[5, 8, 8, 8, 8, 8, 12, 12, 12, 10],
+                k=1,
+            )[0]
+            if os_ver.startswith("10_"):
+                tmpl = "Mozilla/5.0 (Macintosh; Intel Mac OS X {ver}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome} Safari/537.36"
+                user_agent = tmpl.format(ver=os_ver, chrome=chrome_ver)
+            else:
+                # macOS 14/15 UA 格式：10_15_7 已是事实标准占位，但部分 UA 直接写版本
+                tmpl = "Mozilla/5.0 (Macintosh; Intel Mac OS X {ver}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome} Safari/537.36"
+                user_agent = tmpl.format(ver=os_ver.replace("_", "."), chrome=chrome_ver)
         else:
             user_agent = ua_tmpl["template"].format(ver=chrome_ver)
 
@@ -951,6 +970,18 @@ class KiroRegister:
             if created_browser:
                 self._close_browser()
 
+    def _is_stop_requested(self) -> bool:
+        """检查外部是否请求停止（通过 stop_flag 回调）"""
+        fn = getattr(self, "_stop_check_fn", None)
+        if callable(fn):
+            return fn()
+        return False
+
+    def _check_stop(self):
+        """如果收到停止请求则抛出异常中断流程"""
+        if self._is_stop_requested():
+            raise RuntimeError("任务已被用户停止")
+
     def register(
         self,
         email: str,
@@ -997,6 +1028,7 @@ class KiroRegister:
             self._solve_captcha_if_exists(page)
 
             # 1. 填写 Email
+            self._check_stop()
             self.log("1. 填写 Email...")
             # Debug: 打印出现的所有 input 了解真实属性
             try:
@@ -1025,6 +1057,7 @@ class KiroRegister:
             self._solve_captcha_if_exists(page)
 
             # 2. 等待邮箱后的实际下一步（某些 AWS 页面会延迟很久才出现姓名输入框）
+            self._check_stop()
             self.log("2. 等待姓名或 OTP 阶段...")
             stage, stage_input, stage_error = self._wait_for_post_email_step(
                 page, timeout_ms=30000
@@ -1041,6 +1074,7 @@ class KiroRegister:
                 self._click_primary_button(page)
                 self._human_sleep(1.0, 3.0)
 
+                self._check_stop()
                 self.log("3. 等待触发 OTP...")
                 otp_ready, otp_wait_error, otp_input = self._wait_for_otp_step(
                     page, timeout_ms=30000
@@ -1060,11 +1094,13 @@ class KiroRegister:
                 return False, {"error": "未获取到邮箱验证码(OTP Timeout)"}
 
             self.log(f"获取到验证码: {otp_code}，正在填入...")
+            self._check_stop()
             self._type_like_human(page, otp_input, otp_code)
             self._click_primary_button(page)
             self._human_sleep(1.0, 3.0)
 
             # 4. 设定与确认密码
+            self._check_stop()
             self.log("4. 设定与确认密码...")
             password_ready, otp_error = self._wait_for_password_step(
                 page, timeout_ms=15000

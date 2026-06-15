@@ -30,111 +30,160 @@ class KiroPlatform(BasePlatform):
         )
         headless = default_executor != "headed"
 
-        reg = KiroRegister(proxy=proxy, tag="KIRO", headless=headless)
         log_fn = getattr(self, '_log_fn', print)
-        reg.log = lambda msg: log_fn(msg)
-
+        task_id = getattr(self, '_task_id', None)
         otp_timeout = int(self.config.extra.get("otp_timeout", 300))
 
-        if semi_auto:
-            # 半自动模式：通过前端弹窗让用户手动输入验证码
-            import uuid as _uuid
-            task_id = getattr(self, '_task_id', None)
-            slot = str(_uuid.uuid4())[:8]
+        # 最多重试次数：ERR-837 / 封禁时换邮箱重试
+        MAX_RETRIES = 3
 
-            def otp_cb():
-                # 发送特殊日志标记，前端检测到后弹出输入框
-                log_fn(f"[OTP_REQUIRED:{slot}] 请在弹窗中输入邮箱 {email} 收到的 6 位验证码（等待最多 {otp_timeout} 秒）")
-                deadline = time.time() + otp_timeout
-                while time.time() < deadline:
-                    if task_id:
+        for attempt in range(1, MAX_RETRIES + 1):
+            if attempt > 1:
+                log_fn(f"[Kiro] 第 {attempt} 次尝试注册（上次失败，换邮箱重试）...")
+
+            reg = KiroRegister(proxy=proxy, tag="KIRO", headless=headless)
+            reg.log = lambda msg: log_fn(msg)
+            # 暴露给任务层，供停止任务时强制关闭浏览器
+            self._active_register = reg
+
+            # 注入停止检查函数
+            if task_id:
+                def _stop_check():
+                    try:
                         from api.tasks import _tasks, _tasks_lock
                         with _tasks_lock:
-                            code = _tasks.get(task_id, {}).get("otp_slots", {}).get(slot)
-                        if code:
-                            log_fn(f"收到用户输入验证码: {code}")
-                            return code
-                    time.sleep(1)
-                log_fn("[OTP_REQUIRED_TIMEOUT] 等待验证码超时")
-                return None
+                            return _tasks.get(task_id, {}).get("control", {}).get("stop_requested", False)
+                    except Exception:
+                        return False
+                reg._stop_check_fn = _stop_check
 
-        elif self.mailbox:
-            mail_acct = self.mailbox.get_email()
-            email = email or mail_acct.email
-            log_fn(f"邮箱: {mail_acct.email}")
-            _before = self.mailbox.get_current_ids(mail_acct)
-            def otp_cb():
-                log_fn("等待验证码...")
-                code = self.mailbox.wait_for_code(
-                    mail_acct,
-                    keyword="builder id",
-                    timeout=otp_timeout,
-                    before_ids=_before,
-                    code_pattern=r'(?is)(?:verification\s+code|验证码)[^0-9]{0,20}(\d{6})',
-                )
-                if code: log_fn(f"验证码: {code}")
-                return code
-        else:
-            otp_cb = None
+            # 每次重试都创建新邮箱
+            current_email = email
+            current_mailbox = None
 
-        ok, info = reg.register(
-            email=email,
-            pwd=password,
-            name=self.config.extra.get("name", "Kiro User"),
-            mail_token=laoudo_account_id or None,
-            otp_timeout=otp_timeout,
-            otp_callback=otp_cb,
-        )
+            if semi_auto:
+                import uuid as _uuid
+                slot = str(_uuid.uuid4())[:8]
 
-        if not ok:
-            raise RuntimeError(f"Kiro 注册失败: {info.get('error')}")
+                def otp_cb():
+                    log_fn(f"[OTP_REQUIRED:{slot}] 请在弹窗中输入邮箱 {current_email} 收到的 6 位验证码（等待最多 {otp_timeout} 秒）")
+                    deadline = time.time() + otp_timeout
+                    while time.time() < deadline:
+                        if task_id:
+                            from api.tasks import _tasks, _tasks_lock
+                            with _tasks_lock:
+                                code = _tasks.get(task_id, {}).get("otp_slots", {}).get(slot)
+                            if code:
+                                log_fn(f"收到用户输入验证码: {code}")
+                                return code
+                        time.sleep(1)
+                    log_fn("[OTP_REQUIRED_TIMEOUT] 等待验证码超时")
+                    return None
 
-        account = Account(
-            platform="kiro",
-            email=info["email"],
-            password=info["password"],
-            status=AccountStatus.REGISTERED,
-            extra={
-                "name": info.get("name", ""),
-                "accessToken": info.get("accessToken", ""),
-                "sessionToken": info.get("sessionToken", ""),
-                "clientId": info.get("clientId", ""),
-                "clientSecret": info.get("clientSecret", ""),
-                "clientIdHash": info.get("clientIdHash", ""),
-                "refreshToken": info.get("refreshToken", ""),
-                "webAccessToken": info.get("webAccessToken", ""),
-                "region": info.get("region", "us-east-1"),
-                "provider": "BuilderId",
-                "authMethod": "IdC",
-            },
-        )
+            elif self.mailbox:
+                # 重试时重新申请邮箱
+                try:
+                    mail_acct = self.mailbox.get_email()
+                except Exception as e:
+                    raise RuntimeError(f"获取邮箱失败: {e}")
+                current_email = current_email or mail_acct.email
+                current_mailbox = self.mailbox
+                log_fn(f"邮箱: {mail_acct.email}")
+                _before = self.mailbox.get_current_ids(mail_acct)
 
-        # 注册完成后检测账号是否被封禁，结果写入 extra 供 external_sync 判断
-        access_token = info.get("accessToken", "")
-        region = info.get("region", "us-east-1")
-        if access_token:
-            from platforms.kiro.switch import check_kiro_account_banned
-            # 代理：只使用 .env 中的 PROXY_URL，不走代理池
-            detect_proxy = config_store.get("PROXY_URL", "") or config_store.get("proxy_url", "") or None
-            log_fn(f"【封禁检测】开始检测账号状态...（代理: {detect_proxy or '直连'}）")
+                def otp_cb():
+                    log_fn("等待验证码...")
+                    code = current_mailbox.wait_for_code(
+                        mail_acct,
+                        keyword="builder id",
+                        timeout=otp_timeout,
+                        before_ids=_before,
+                        code_pattern=r'(?is)(?:verification\s+code|验证码)[^0-9]{0,20}(\d{6})',
+                    )
+                    if code:
+                        log_fn(f"验证码: {code}")
+                    return code
+            else:
+                otp_cb = None
+
             try:
-                is_banned, detail = check_kiro_account_banned(
-                    access_token=access_token,
-                    region=region,
-                    proxy=detect_proxy,
+                ok, info = reg.register(
+                    email=current_email,
+                    pwd=password,
+                    name=self.config.extra.get("name", "Kiro User"),
+                    mail_token=laoudo_account_id or None,
+                    otp_timeout=otp_timeout,
+                    otp_callback=otp_cb,
                 )
-                if is_banned:
-                    log_fn(f"【封禁检测】⚠️  账号已被封禁！详情: {detail}")
-                    account.status = AccountStatus.INVALID
-                    account.extra["ban_detail"] = detail
-                else:
-                    log_fn(f"【封禁检测】✅ 账号状态正常。详情: {detail}")
-            except Exception as e:
-                log_fn(f"【封禁检测】检测异常（跳过，不影响导入）: {e}")
-        else:
-            log_fn("【封禁检测】缺少 accessToken，跳过检测")
+            finally:
+                # 无论成败，清理本次创建的邮箱
+                if current_mailbox is not None:
+                    try:
+                        current_mailbox.cleanup()
+                    except Exception:
+                        pass
 
-        return account
+            if not ok:
+                err_msg = info.get('error', '')
+                # ERR-837：AWS 拒绝该邮箱域名，可以换邮箱重试
+                if "ERR-837" in err_msg and attempt < MAX_RETRIES:
+                    log_fn(f"[Kiro] ERR-837 邮箱域名被 AWS 拒绝，将换邮箱重试 ({attempt}/{MAX_RETRIES})")
+                    continue
+                raise RuntimeError(f"Kiro 注册失败: {err_msg}")
+
+            account = Account(
+                platform="kiro",
+                email=info["email"],
+                password=info["password"],
+                status=AccountStatus.REGISTERED,
+                extra={
+                    "name": info.get("name", ""),
+                    "accessToken": info.get("accessToken", ""),
+                    "sessionToken": info.get("sessionToken", ""),
+                    "clientId": info.get("clientId", ""),
+                    "clientSecret": info.get("clientSecret", ""),
+                    "clientIdHash": info.get("clientIdHash", ""),
+                    "refreshToken": info.get("refreshToken", ""),
+                    "webAccessToken": info.get("webAccessToken", ""),
+                    "region": info.get("region", "us-east-1"),
+                    "provider": "BuilderId",
+                    "authMethod": "IdC",
+                },
+            )
+
+            # 注册完成后检测账号是否被封禁
+            access_token = info.get("accessToken", "")
+            region = info.get("region", "us-east-1")
+            if access_token:
+                from platforms.kiro.switch import check_kiro_account_banned
+                detect_proxy = config_store.get("PROXY_URL", "") or config_store.get("proxy_url", "") or None
+                log_fn(f"【封禁检测】开始检测账号状态...（代理: {detect_proxy or '直连'}）")
+                try:
+                    is_banned, detail = check_kiro_account_banned(
+                        access_token=access_token,
+                        region=region,
+                        proxy=detect_proxy,
+                    )
+                    if is_banned:
+                        log_fn(f"【封禁检测】⚠️  账号已被封禁！详情: {detail}")
+                        # 封禁：换邮箱重试
+                        if attempt < MAX_RETRIES:
+                            log_fn(f"[Kiro] 账号被封禁，将换邮箱重试 ({attempt}/{MAX_RETRIES})")
+                            continue
+                        # 已达最大重试次数，标记封禁返回
+                        account.status = AccountStatus.INVALID
+                        account.extra["ban_detail"] = detail
+                    else:
+                        log_fn(f"【封禁检测】✅ 账号状态正常。详情: {detail}")
+                except Exception as e:
+                    log_fn(f"【封禁检测】检测异常（跳过，不影响导入）: {e}")
+            else:
+                log_fn("【封禁检测】缺少 accessToken，跳过检测")
+
+            return account
+
+        # 理论上不会走到这里（循环内必定 return 或 raise）
+        raise RuntimeError("Kiro 注册失败：已达最大重试次数")
 
     def check_valid(self, account: Account) -> bool:
         """通过 refreshToken 检测账号是否有效"""

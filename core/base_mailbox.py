@@ -2219,11 +2219,42 @@ class CFWorkerMailbox(BaseMailbox):
         print(
             f"[CFWorker] 生成邮箱: {email} token={token[:40] if token else 'NONE'}..."
         )
-        return MailboxAccount(
+        account = MailboxAccount(
             email=email,
             account_id=token,
             extra={"cfworker_domain": selected_domain} if selected_domain else None,
         )
+        # 保存已创建的邮箱，供 cleanup() 删除
+        self._created_account = account
+        return account
+
+    def _delete_address(self, email: str) -> None:
+        """调用 CF Worker admin API 删除邮箱地址"""
+        import requests as _req
+        try:
+            resp = _req.post(
+                f"{self.api}/admin/delete_address",
+                json={"email": email},
+                headers=self._headers(),
+                proxies=self.proxy,
+                timeout=10,
+            )
+            if resp.status_code in (200, 204):
+                self._log(f"[CFWorker] 已删除邮箱地址: {email}")
+            else:
+                self._log(f"[CFWorker] 删除邮箱失败 HTTP {resp.status_code}: {resp.text[:100]}")
+        except Exception as e:
+            self._log(f"[CFWorker] 删除邮箱异常: {e}")
+
+    def cleanup(self, account: MailboxAccount = None) -> None:
+        """注册完成后删除临时邮箱地址（无论成功、失败还是停止任务）"""
+        target = account or getattr(self, "_created_account", None)
+        if target is None:
+            return
+        email = target.email
+        if email:
+            self._delete_address(email)
+        self._created_account = None
 
     def _get_mails(self, email: str) -> list:
         self._ensure_api_configured()
