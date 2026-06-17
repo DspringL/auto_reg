@@ -176,12 +176,8 @@ const TAB_ITEMS = [
             {
                 title: '阿里企业邮箱',
                 provider: 'alimail',
-                desc: '通过阿里邮箱开放平台 API 创建用户并轮询收件箱验证码',
-                fields: [
-                    { key: 'alimail_app_id', label: '应用 ID (App ID)', placeholder: 'yvzcBSzoJ7gNt6U0' },
-                    { key: 'alimail_app_secret', label: '应用密钥 (Secret)', secret: true },
-                    { key: 'alimail_domain', label: '邮箱域名', placeholder: 'hankol.com.cn' },
-                ],
+                desc: '多域名实例配置见下方「阿里企业邮箱多实例管理」',
+                fields: [],
             },
             {
                 title: 'LuckMail',
@@ -589,6 +585,182 @@ function CFWorkerInstancesSection({
         <Card
             title="CF Worker 多实例管理"
             extra={<span style={{ fontSize: 12, color: '#7a8ba3' }}>配置多个 CF Worker 实例，按策略分配使用</span>}
+            style={{ marginBottom: 16 }}
+        >
+            <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>选取策略：</span>
+                    <Select
+                        value={strategy}
+                        options={strategyOptions}
+                        style={{ width: 140 }}
+                        onChange={setStrategy}
+                    />
+                </div>
+                {strategy === 'specified' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>指定实例：</span>
+                        <Select
+                            value={specifiedId || undefined}
+                            style={{ width: 200 }}
+                            placeholder="选择实例"
+                            options={enabledInstances.map((inst) => ({
+                                label: inst.name || inst.id,
+                                value: inst.id,
+                            }))}
+                            onChange={setSpecifiedId}
+                        />
+                    </div>
+                )}
+            </div>
+
+            {instances.length > 0 ? (
+                <Tabs
+                    type="card"
+                    activeKey={validKey ?? undefined}
+                    onChange={setActiveInstKey}
+                    items={tabItems}
+                    tabBarExtraContent={
+                        <Button type="dashed" size="small" icon={<PlusOutlined />} onClick={addInstance}>
+                            添加实例
+                        </Button>
+                    }
+                />
+            ) : (
+                <div style={{ textAlign: 'center', padding: '24px 0' }}>
+                    <Typography.Text type="secondary">还没有实例，点击下方按钮添加。</Typography.Text>
+                    <div style={{ marginTop: 12 }}>
+                        <Button type="dashed" icon={<PlusOutlined />} onClick={addInstance}>
+                            添加实例
+                        </Button>
+                    </div>
+                </div>
+            )}
+        </Card>
+    )
+}
+
+function AliMailInstancesSection({
+    instances,
+    setInstances,
+    strategy,
+    setStrategy,
+    specifiedId,
+    setSpecifiedId,
+}: {
+    instances: any[]
+    setInstances: (v: any[]) => void
+    strategy: string
+    setStrategy: (v: string) => void
+    specifiedId: string
+    setSpecifiedId: (v: string) => void
+}) {
+    const [activeInstKey, setActiveInstKey] = useState<string | null>(
+        () => instances[0]?.id ?? null
+    )
+
+    const validKey = instances.length > 0
+        ? (instances.find((inst) => inst?.id === activeInstKey) ? activeInstKey : instances[0]?.id ?? null)
+        : null
+
+    const updateInst = (idx: number, patch: Record<string, any>) => {
+        setInstances(instances.map((inst, i) => i === idx ? { ...inst, ...patch } : inst))
+    }
+
+    const addInstance = () => {
+        const newId = `alimail_${Date.now()}`
+        const newInst = {
+            id: newId,
+            name: `实例 ${instances.length + 1}`,
+            enabled: true,
+            app_id: '',
+            app_secret: '',
+            domain: '',
+        }
+        setInstances([...instances, newInst])
+        setActiveInstKey(newId)
+    }
+
+    const removeInstance = (idx: number, id: string) => {
+        const next = instances.filter((_, i) => i !== idx)
+        setInstances(next)
+        if (validKey === id) setActiveInstKey(next[0]?.id ?? null)
+    }
+
+    const strategyOptions = [
+        { label: '随机', value: 'random' },
+        { label: '轮询', value: 'round_robin' },
+        { label: '指定实例', value: 'specified' },
+    ]
+
+    const enabledInstances = instances.filter((inst) => inst?.enabled)
+
+    const tabItems = instances.map((inst, idx) => ({
+        key: inst?.id ?? String(idx),
+        label: (
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{
+                    width: 7, height: 7, borderRadius: '50%',
+                    background: inst?.enabled ? '#10b981' : '#d9d9d9',
+                    flexShrink: 0, display: 'inline-block',
+                }} />
+                {inst?.name || `实例 ${idx + 1}`}
+            </span>
+        ),
+        children: (
+            <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <Space>
+                        <Switch
+                            size="small"
+                            checked={!!inst?.enabled}
+                            onChange={(checked) => updateInst(idx, { enabled: checked })}
+                            checkedChildren="启用"
+                            unCheckedChildren="禁用"
+                        />
+                        <Input
+                            variant="borderless"
+                            value={inst?.name ?? ''}
+                            placeholder={`实例 ${idx + 1}`}
+                            style={{ fontWeight: 500, width: 160 }}
+                            onChange={(e) => updateInst(idx, { name: e.target.value })}
+                        />
+                    </Space>
+                    <Button danger size="small" onClick={() => removeInstance(idx, inst?.id)}>
+                        删除此实例
+                    </Button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+                    {([
+                        ['app_id', '应用 ID (App ID)', 'yvzcBSzoJ7gNt6U0', false],
+                        ['app_secret', '应用密钥 (Secret)', 'app secret', true],
+                        ['domain', '邮箱域名', 'hankol.com.cn', false],
+                    ] as [string, string, string, boolean][]).map(([key, label, placeholder, secret]) => (
+                        <Form.Item key={key} label={label} style={{ marginBottom: 10 }}>
+                            {secret ? (
+                                <Input.Password
+                                    value={inst?.[key] ?? ''}
+                                    placeholder={placeholder}
+                                    onChange={(e) => updateInst(idx, { [key]: e.target.value })}
+                                />
+                            ) : (
+                                <Input
+                                    value={inst?.[key] ?? ''}
+                                    placeholder={placeholder}
+                                    onChange={(e) => updateInst(idx, { [key]: e.target.value })}
+                                />
+                            )}
+                        </Form.Item>
+                    ))}
+                </div>
+            </div>
+        ),
+    }))
+
+    return (
+        <Card
+            title="阿里企业邮箱多实例管理"
+            extra={<span style={{ fontSize: 12, color: '#7a8ba3' }}>配置多个域名实例，按策略分配使用</span>}
             style={{ marginBottom: 16 }}
         >
             <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1136,6 +1308,10 @@ export default function Settings() {
     const [cfInstances, setCfInstances] = useState<any[]>([])
     const [cfStrategy, setCfStrategy] = useState('random')
     const [cfSpecifiedId, setCfSpecifiedId] = useState('')
+    // 阿里企业邮箱多实例独立 state
+    const [aliInstances, setAliInstances] = useState<any[]>([])
+    const [aliStrategy, setAliStrategy] = useState('random')
+    const [aliSpecifiedId, setAliSpecifiedId] = useState('')
 
     useEffect(() => {
         apiFetch('/config').then((data) => {
@@ -1157,6 +1333,19 @@ export default function Settings() {
             delete data.cfworker_instances
             delete data.cfworker_strategy
             delete data.cfworker_specified_id
+            // 解析阿里企业邮箱多实例配置
+            let aliInstances_: any[] = []
+            if (typeof data.alimail_instances === 'string') {
+                try { aliInstances_ = JSON.parse(data.alimail_instances) } catch { aliInstances_ = [] }
+            } else if (Array.isArray(data.alimail_instances)) {
+                aliInstances_ = data.alimail_instances
+            }
+            setAliInstances(aliInstances_)
+            setAliStrategy(data.alimail_strategy || 'random')
+            setAliSpecifiedId(data.alimail_specified_id || '')
+            delete data.alimail_instances
+            delete data.alimail_strategy
+            delete data.alimail_specified_id
             form.setFieldsValue(data)
         })
     }, [form])
@@ -1169,6 +1358,10 @@ export default function Settings() {
             values.cfworker_instances = JSON.stringify(cfInstances)
             values.cfworker_strategy = cfStrategy
             values.cfworker_specified_id = cfSpecifiedId
+            // 注入独立 state 的阿里企业邮箱数据
+            values.alimail_instances = JSON.stringify(aliInstances)
+            values.alimail_strategy = aliStrategy
+            values.alimail_specified_id = aliSpecifiedId
             await apiFetch('/config', { method: 'PUT', body: JSON.stringify({ data: values }) })
             message.success('保存成功')
             setSaved(true)
@@ -1225,6 +1418,16 @@ export default function Settings() {
                                             setStrategy={setCfStrategy}
                                             specifiedId={cfSpecifiedId}
                                             setSpecifiedId={setCfSpecifiedId}
+                                        />
+                                    ) : null}
+                                    {selectedMailProvider === 'alimail' ? (
+                                        <AliMailInstancesSection
+                                            instances={aliInstances}
+                                            setInstances={setAliInstances}
+                                            strategy={aliStrategy}
+                                            setStrategy={setAliStrategy}
+                                            specifiedId={aliSpecifiedId}
+                                            setSpecifiedId={setAliSpecifiedId}
                                         />
                                     ) : null}
                                 </>

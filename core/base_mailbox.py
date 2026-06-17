@@ -237,10 +237,12 @@ class AliMailMailbox(BaseMailbox):
         app_secret: str,
         domain: str,
         proxy: str = None,
+        instance_name: str = "",
     ):
         self.app_id = app_id or ""
         self.app_secret = app_secret or ""
         self.domain = (domain or "").strip().lstrip("@")
+        self.instance_name = instance_name or ""
         # 阿里邮箱 API 为国内服务，不走代理，直连更稳定
         self.proxy = None
         self._access_token: Optional[str] = None
@@ -248,8 +250,9 @@ class AliMailMailbox(BaseMailbox):
 
     def _ensure_config(self) -> None:
         if not self.app_id or not self.app_secret or not self.domain:
+            tag = f"[{self.instance_name}] " if self.instance_name else ""
             raise RuntimeError(
-                "阿里企业邮箱未配置完整：请设置 alimail_app_id、alimail_app_secret、alimail_domain"
+                f"阿里企业邮箱{tag}未配置完整：请设置 alimail_app_id、alimail_app_secret、alimail_domain"
             )
 
     def _get_access_token(self) -> str:
@@ -345,7 +348,8 @@ class AliMailMailbox(BaseMailbox):
         password = "".join(random.choice(pw_chars) for _ in range(16))
 
         self._create_user(email, password, display_name=prefix)
-        self._log(f"[AliMail] 生成邮箱: {email}")
+        tag = f"[{self.instance_name}] " if self.instance_name else ""
+        self._log(f"[AliMail] {tag}生成邮箱: {email}")
         account = MailboxAccount(email=email, account_id=email)
         self._created_account = account
         # 等待欢迎邮件到达，避免后续轮询时误将欢迎邮件当作新邮件
@@ -660,6 +664,53 @@ def create_mailbox(
             proxy=proxy,
         )
     elif provider == "alimail":
+        # 多实例支持：优先从 alimail_instances 中按策略选取
+        instances_raw = extra.get("alimail_instances", "")
+        instances = []
+        if instances_raw:
+            try:
+                import json as _json
+                parsed = _json.loads(instances_raw) if isinstance(instances_raw, str) else instances_raw
+                if isinstance(parsed, list):
+                    instances = [
+                        inst for inst in parsed
+                        if isinstance(inst, dict) and inst.get("enabled", True)
+                        and inst.get("app_id") and inst.get("app_secret") and inst.get("domain")
+                    ]
+            except Exception:
+                instances = []
+
+        if instances:
+            strategy = str(extra.get("alimail_strategy", "random") or "random").strip()
+            chosen = None
+            if strategy == "specified":
+                specified_id = str(extra.get("alimail_specified_id", "") or "").strip()
+                chosen = next((inst for inst in instances if str(inst.get("id", "")) == specified_id), None)
+                if chosen is None:
+                    chosen = instances[0]
+            elif strategy == "round_robin":
+                import threading as _threading
+                _rr_lock = getattr(create_mailbox, "_alimail_rr_lock", None)
+                if _rr_lock is None:
+                    create_mailbox._alimail_rr_lock = _threading.Lock()
+                    create_mailbox._alimail_rr_index = 0
+                with create_mailbox._alimail_rr_lock:
+                    idx = create_mailbox._alimail_rr_index % len(instances)
+                    chosen = instances[idx]
+                    create_mailbox._alimail_rr_index = idx + 1
+            else:  # random (default)
+                import random as _random
+                chosen = _random.choice(instances)
+
+            return AliMailMailbox(
+                app_id=chosen.get("app_id", ""),
+                app_secret=chosen.get("app_secret", ""),
+                domain=chosen.get("domain", ""),
+                instance_name=chosen.get("name", ""),
+                proxy=proxy,
+            )
+
+        # 兼容旧版单实例配置
         return AliMailMailbox(
             app_id=extra.get("alimail_app_id", ""),
             app_secret=extra.get("alimail_app_secret", ""),
