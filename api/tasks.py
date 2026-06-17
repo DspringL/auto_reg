@@ -100,11 +100,29 @@ def _auto_upload_integrations(task_id: str, account):
         _log(task_id, f"  [Auto Upload] 自动导入异常: {e}")
 
 
+def _interruptible_sleep(seconds: float, task_id: str, task_control=None) -> bool:
+    """分段 sleep，每 0.25 秒检查一次停止标志。返回 True 表示正常结束，False 表示被停止。"""
+    remaining = max(float(seconds or 0), 0.0)
+    while remaining > 0:
+        # 检查旧式字典标志（兼容）
+        with _tasks_lock:
+            if _tasks.get(task_id, {}).get("control", {}).get("stop_requested"):
+                return False
+        # 检查新式 RegisterTaskControl
+        if task_control is not None and task_control.is_stop_requested():
+            return False
+        chunk = min(0.25, remaining)
+        time.sleep(chunk)
+        remaining -= chunk
+    return True
+
+
 def _run_register(task_id: str, req: RegisterTaskRequest):
     from core.registry import get
     from core.base_platform import RegisterConfig
     from core.db import save_account
     from core.base_mailbox import create_mailbox
+    from core.task_runtime import RegisterTaskControl, StopTaskRequested
 
     with _tasks_lock:
         _tasks[task_id]["status"] = "running"
@@ -113,6 +131,11 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
     errors = []
     start_gate_lock = threading.Lock()
     next_start_time = time.time()
+
+    # 创建协作式任务控制器，供 platform/mailbox 内部的 checkpoint 使用
+    task_control = RegisterTaskControl()
+    with _tasks_lock:
+        _tasks[task_id]["_task_control"] = task_control
 
     try:
         PlatformCls = get(req.platform)
@@ -135,6 +158,10 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 if _tasks.get(task_id, {}).get("control", {}).get("stop_requested"):
                     _log(task_id, f"第 {i+1} 个账号: 任务已停止，跳过")
                     return "stopped"
+            if task_control.is_stop_requested():
+                _log(task_id, f"第 {i+1} 个账号: 任务已停止，跳过")
+                return "stopped"
+
             _mailbox = None
             try:
                 from core.proxy_pool import proxy_pool
@@ -142,7 +169,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 _proxy = req.proxy
                 if not _proxy:
                     _proxy = proxy_pool.get_next()
-                # 延迟控制
+                # 延迟控制（可中断）
                 if req.register_delay_seconds > 0 or (req.random_delay_min is not None and req.random_delay_max is not None):
                     with start_gate_lock:
                         now = time.time()
@@ -152,7 +179,9 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                         if req.register_delay_seconds > 0 and wait_seconds > 0:
                             _log(
                                 task_id, f"第 {i+1} 个账号启动前延迟 {wait_seconds:g} 秒")
-                            time.sleep(wait_seconds)
+                            if not _interruptible_sleep(wait_seconds, task_id, task_control):
+                                _log(task_id, f"第 {i+1} 个账号: 延迟期间任务停止")
+                                return "stopped"
                         next_start_time = time.time() + req.register_delay_seconds
 
                         # 随机延迟
@@ -163,7 +192,9 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                             if random_delay > 0:
                                 _log(
                                     task_id, f"第 {i+1} 个账号随机延迟 {random_delay:.1f} 秒 ({req.random_delay_min}-{req.random_delay_max}秒)")
-                                time.sleep(random_delay)
+                                if not _interruptible_sleep(random_delay, task_id, task_control):
+                                    _log(task_id, f"第 {i+1} 个账号: 随机延迟期间任务停止")
+                                    return "stopped"
                             next_start_time = time.time() + random_delay
                 from core.config_store import config_store
                 merged_extra = config_store.get_all().copy()
@@ -180,6 +211,8 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                 _platform = PlatformCls(config=_config, mailbox=_mailbox)
                 _platform._log_fn = lambda msg: _log(task_id, msg)
                 _platform._task_id = task_id
+                # 绑定协作式任务控制器，让 platform/mailbox 内部的 checkpoint 能响应停止
+                _platform.bind_task_control(task_control)
                 if getattr(_platform, "mailbox", None) is not None:
                     _platform.mailbox._log_fn = _platform._log_fn
                 with _tasks_lock:
@@ -233,6 +266,12 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                         _tasks[task_id].setdefault(
                             "cashier_urls", []).append(cashier_url)
                 return True
+            except StopTaskRequested:
+                # 来自 task_control.checkpoint() 的停止信号，同步到旧式字典标志
+                with _tasks_lock:
+                    _tasks[task_id].setdefault("control", {})["stop_requested"] = True
+                _log(task_id, f"第 {i+1} 个账号: 收到停止信号，中断注册")
+                return "stopped"
             except Exception as e:
                 if _proxy:
                     proxy_pool.report_fail(_proxy)
@@ -564,6 +603,10 @@ def stop_task(task_id: str):
         if task.get("status") != "running":
             raise HTTPException(400, "任务未在运行")
         task.setdefault("control", {})["stop_requested"] = True
+        # 同时通知协作式控制器（若已绑定），让 mailbox/platform 的 checkpoint 能立即感知
+        _tc = task.get("_task_control")
+        if _tc is not None:
+            _tc.request_stop()
         _log(task_id, "[STOP] 用户请求停止任务，等待当前线程完成...")
     return {"ok": True, "message": "已发送停止请求"}
 

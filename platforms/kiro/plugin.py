@@ -41,20 +41,30 @@ class KiroPlatform(BasePlatform):
             import uuid as _uuid
             task_id = getattr(self, '_task_id', None)
             slot = str(_uuid.uuid4())[:8]
+            _task_control = getattr(self, '_task_control', None)
 
             def otp_cb():
                 # 发送特殊日志标记，前端检测到后弹出输入框
                 log_fn(f"[OTP_REQUIRED:{slot}] 请在弹窗中输入邮箱 {email} 收到的 6 位验证码（等待最多 {otp_timeout} 秒）")
                 deadline = time.time() + otp_timeout
                 while time.time() < deadline:
+                    # 检查任务停止信号（协作式控制器）
+                    if _task_control is not None and _task_control.is_stop_requested():
+                        log_fn("[OTP_REQUIRED_STOPPED] 任务已停止，放弃等待验证码")
+                        return None
+                    # 检查旧式字典标志
                     if task_id:
                         from api.tasks import _tasks, _tasks_lock
                         with _tasks_lock:
-                            code = _tasks.get(task_id, {}).get("otp_slots", {}).get(slot)
+                            task_data = _tasks.get(task_id, {})
+                            if task_data.get("control", {}).get("stop_requested"):
+                                log_fn("[OTP_REQUIRED_STOPPED] 任务已停止，放弃等待验证码")
+                                return None
+                            code = task_data.get("otp_slots", {}).get(slot)
                         if code:
                             log_fn(f"收到用户输入验证码: {code}")
                             return code
-                    time.sleep(1)
+                    time.sleep(0.5)
                 log_fn("[OTP_REQUIRED_TIMEOUT] 等待验证码超时")
                 return None
 
