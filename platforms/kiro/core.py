@@ -164,6 +164,12 @@ class _DesktopAuthCallbackServer:
         self._thread = None
 
 
+class _StopRequested(RuntimeError):
+    """KiroRegister 内部：任务被外部请求停止。"""
+    def __init__(self):
+        super().__init__("任务已手动停止")
+
+
 class KiroRegister:
     def __init__(self, proxy=None, tag="KIRO", headless=False):
         self.proxy = proxy
@@ -173,16 +179,35 @@ class KiroRegister:
         self.pw = None
         self.browser = None
         self.context = None
+        # 停止钩子：外部传入一个返回 bool 的函数，返回 True 表示已请求停止
+        self._stop_fn = None
 
         # 保存捕获到的 Token API 响应
         self._captured_tokens = {}
         self._network_debug = []
 
+    def set_stop_fn(self, fn):
+        """注入停止检查函数，fn() 返回 True 时中止流程。"""
+        self._stop_fn = fn
+
+    def _check_stop(self):
+        """检查是否被请求停止，是则抛出 _StopRequested。"""
+        if self._stop_fn is not None and self._stop_fn():
+            raise _StopRequested()
+
     def log(self, msg):
+        self._check_stop()
         self.log_fn(f"[{self.tag}] {msg}")
 
     def _human_sleep(self, min_seconds: float = 0.18, max_seconds: float = 0.65):
-        time.sleep(random.uniform(min_seconds, max_seconds))
+        """可中断的随机延时，每 0.1 秒检查一次停止标志。"""
+        total = random.uniform(min_seconds, max_seconds)
+        elapsed = 0.0
+        while elapsed < total:
+            self._check_stop()
+            chunk = min(0.1, total - elapsed)
+            time.sleep(chunk)
+            elapsed += chunk
 
     def _randomize_name(self, base_name: str) -> str:
         base = (base_name or "Kiro User").strip()
@@ -541,6 +566,24 @@ class KiroRegister:
             page.locator('input[name="code"], input[id*="code"]'),
         ]
 
+    def _wait_for_url_interruptible(self, page: Page, url_pattern, timeout_ms: int = 30000):
+        """分段轮询等待 URL 变化，每 200ms 检查一次停止标志。"""
+        deadline = time.time() + timeout_ms / 1000
+        while time.time() < deadline:
+            self._check_stop()
+            try:
+                current = page.url
+                if isinstance(url_pattern, re.Pattern):
+                    if url_pattern.search(current):
+                        return
+                elif isinstance(url_pattern, str):
+                    if url_pattern in current:
+                        return
+            except Exception:
+                pass
+            time.sleep(0.2)
+        # 超时不抛异常，交给调用方处理
+
     def _wait_for_password_step(
         self, page: Page, timeout_ms: int = 15000
     ) -> Tuple[bool, str]:
@@ -554,6 +597,7 @@ class KiroRegister:
         ]
 
         while time.time() < deadline:
+            self._check_stop()
             try:
                 if password_input.count() > 0 and password_input.first.is_visible():
                     return True, ""
@@ -580,6 +624,7 @@ class KiroRegister:
         ]
 
         while time.time() < deadline:
+            self._check_stop()
             otp_field = self._get_first_visible_locator(
                 self._otp_input_candidates(page)
             )
@@ -614,6 +659,7 @@ class KiroRegister:
         ]
 
         while time.time() < deadline:
+            self._check_stop()
             field = self._get_first_visible_locator(
                 self._otp_input_candidates(page))
             if field:
@@ -967,14 +1013,16 @@ class KiroRegister:
         self.log(f"开始 Playwright 流程, Email: {email}")
         page = None
         try:
+            self._check_stop()
             self._init_browser()
             page = self.context.new_page()
 
             if stealth_sync:
                 stealth_sync(page)
 
+            self._check_stop()
             self.log("加载 Kiro Login ...")
-            page.goto(KIRO_SIGNIN_URL, wait_until="domcontentloaded")
+            page.goto(KIRO_SIGNIN_URL, wait_until="domcontentloaded", timeout=30000)
             self._human_sleep(1.9, 3.4)
 
             # Debug: dump all buttons to log
@@ -986,13 +1034,15 @@ class KiroRegister:
             except Exception as e:
                 self.log(f"Debug UI failed: {e}")
 
+            self._check_stop()
             if page.locator('button:has-text("Builder ID")').count() > 0:
                 page.click('button:has-text("Builder ID")')
             elif page.locator('text="AWS Builder ID"').count() > 0:
                 page.locator('text="AWS Builder ID"').first.click()
 
             self.log("等待跳转到 AWS SSO ...")
-            page.wait_for_url(re.compile(r"signin\.aws"), timeout=30000)
+            self._wait_for_url_interruptible(page, re.compile(r"signin\.aws"), timeout_ms=30000)
+            self._check_stop()
             self._accept_cookie_banner_if_present(page)
             self._solve_captcha_if_exists(page)
 
@@ -1009,12 +1059,12 @@ class KiroRegister:
             except Exception:
                 pass
 
-            # 宽泛定位器，涵盖大量 aws SSO 可能出现的情况
-            # AWS 的极度变态之处：它不用 type="email" 也不用 name="email"，而是动态生成类似于 id="formField14-1774542604278-6990" 的 type="text"
+            self._check_stop()
             email_input = page.locator(
                 'input[placeholder="username@example.com"], input[type="email"]'
             ).first
             email_input.wait_for(state="visible", timeout=15000)
+            self._check_stop()
             self._type_like_human(
                 page,
                 'input[placeholder="username@example.com"], input[type="email"]',
@@ -1034,6 +1084,7 @@ class KiroRegister:
             if stage == "timeout":
                 return False, {"error": stage_error}
 
+            self._check_stop()
             otp_input = stage_input if stage == "otp" else None
             if stage == "name":
                 self.log("2. 填写名字 (Your name)...")
@@ -1052,6 +1103,7 @@ class KiroRegister:
             if not otp_ready:
                 return False, {"error": f"姓名提交后 AWS 返回错误: {otp_wait_error}"}
 
+            self._check_stop()
             otp_code = None
             if otp_callback:
                 otp_code = otp_callback()
@@ -1059,6 +1111,7 @@ class KiroRegister:
             if not otp_code:
                 return False, {"error": "未获取到邮箱验证码(OTP Timeout)"}
 
+            self._check_stop()
             self.log(f"获取到验证码: {otp_code}，正在填入...")
             self._type_like_human(page, otp_input, otp_code)
             self._click_primary_button(page)
@@ -1072,6 +1125,7 @@ class KiroRegister:
             if not password_ready:
                 return False, {"error": f"OTP 提交后未通过: {otp_error}"}
 
+            self._check_stop()
             self._fill_password_fields(page, pwd)
             self._click_primary_button(page)
             self._human_sleep(1.0, 3.0)
@@ -1089,6 +1143,7 @@ class KiroRegister:
                 return False, {"error": f"密码设置未通过: {password_error}"}
 
             # 5. 回调授权
+            self._check_stop()
             allow_btn = page.locator('text="Allow"')
             if allow_btn.count() > 0:
                 self.log("点击 Allow 授权应用...")
@@ -1097,15 +1152,14 @@ class KiroRegister:
             # 6. 等待返回 Kiro 拿 Token
             self.log("等待回到 Kiro...")
             try:
-                # 至少等它请求完 CompleteLogin
-                page.wait_for_url(re.compile(r"kiro\.dev"), timeout=30000)
+                self._wait_for_url_interruptible(page, re.compile(r"kiro\.dev"), timeout_ms=30000)
                 self._human_sleep(3.0, 5.8)
             except TimeoutError:
                 pass
 
+            self._check_stop()
             if "kiro.dev" not in page.url:
                 err_text = ""
-                # try to extract some error
                 if page.locator(".awsui-alert-content").count() > 0:
                     err_text = page.locator(
                         ".awsui-alert-content").text_content()
@@ -1179,12 +1233,15 @@ class KiroRegister:
                     "error": "注册看似完成，但未能提取出 OAuth Token。可能是网络拦截失败。"
                 }
 
+            self._check_stop()
             try:
                 desktop_tokens = self._complete_desktop_idc_flow(
                     email=email, pwd=pwd)
                 self._captured_tokens.update(desktop_tokens)
                 self.log(
                     f"桌面端 Builder ID Token 已补抓完成: keys={list(desktop_tokens.keys())}, refreshToken={'有' if desktop_tokens.get('refreshToken') else '无'}")
+            except _StopRequested:
+                raise
             except Exception as desktop_error:
                 self.log(f"⚠️ 桌面端 Builder ID Token 补抓失败: {desktop_error}")
 
@@ -1205,8 +1262,11 @@ class KiroRegister:
                 "webAccessToken": self._captured_tokens.get("webAccessToken", ""),
             }
 
+        except _StopRequested:
+            self.log_fn(f"[{self.tag}] 注册流程已停止（用户请求）")
+            return False, {"error": "任务已手动停止"}
         except Exception as e:
-            self.log(f"❌ Playwright 遇到异常: {e}")
+            self.log_fn(f"[{self.tag}] ❌ Playwright 遇到异常: {e}")
             # 保存一下截图方便排查
             try:
                 if page:
