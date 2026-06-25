@@ -778,7 +778,7 @@ class KiroRegister:
                 field.fill("")
             except Exception:
                 pass
-            field.type(password, delay=random.randint(45, 95))
+            field.type(password, delay=random.randint(80, 200))
             # 验证写入是否成功，失败则回退到 fill
             if field.input_value() != password:
                 field.click()
@@ -949,7 +949,7 @@ class KiroRegister:
                         password_input.fill("")
                     except Exception:
                         pass
-                    password_input.type(pwd, delay=random.randint(45, 95))
+                    password_input.type(pwd, delay=random.randint(80, 200))
                     self._click_primary_button(page)
                     self._human_sleep(0.7, 1.4)
         except Exception:
@@ -1177,7 +1177,7 @@ class KiroRegister:
             self._check_stop()
             email_input.click()
             email_input.fill("")
-            email_input.type(email, delay=random.randint(40, 90))
+            email_input.type(email, delay=random.randint(80, 200))
             self._click_primary_button(page)
             self._human_sleep(1.0, 3.0)
             self._solve_captcha_if_exists(page)
