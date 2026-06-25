@@ -88,6 +88,18 @@ CONFIG_KEYS = [
     "grok2api_quota",
     "kiro_manager_path",
     "kiro_manager_exe",
+    # ── 代理配置 ──────────────────────────────────────────────────────────
+    # 本地出口代理（调用动态代理 API 的境外网络出口）
+    "local_outbound_proxy",
+    # 静态兜底代理
+    "proxy_url",
+    # 神龙海外住宅代理
+    "shenlong_enabled",
+    "shenlong_api_key",
+    "shenlong_country",
+    "shenlong_protocol",
+    "shenlong_fetch_count",
+    "shenlong_ip_ttl",
 ]
 
 

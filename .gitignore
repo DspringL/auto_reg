@@ -64,5 +64,5 @@ OPTIMIZATION_SUMMARY.md
 QUICKSTART.md
 verify_optimization.py
 
-kiro_error.html
-kiro_error.png
+*.html
+*.png

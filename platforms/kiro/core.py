@@ -288,6 +288,9 @@ class KiroRegister:
         self.context.on("request", self._on_request)
         self.context.on("response", self._on_response)
 
+        # 打印实际出口 IP（通过浏览器代理发起请求，结果最准确）
+        self._log_exit_ip()
+
     def _is_watched_url(self, url: str) -> bool:
         url = (url or "").lower()
         return any(
@@ -410,6 +413,37 @@ class KiroRegister:
                 stack.extend(current)
 
         return found
+
+    def _log_exit_ip(self):
+        """通过新标签页访问 IP 查询服务，将出口 IP 打印到日志（静默失败，不影响主流程）。"""
+        CHECK_URLS = [
+            ("https://api.ipify.org?format=json", lambda t: __import__('json').loads(t).get("ip", "")),
+            ("http://myip.ipip.net",               lambda t: t.strip()),
+            ("https://httpbin.org/ip",             lambda t: __import__('json').loads(t).get("origin", "")),
+        ]
+        ip_page = None
+        try:
+            ip_page = self.context.new_page()
+            for url, extractor in CHECK_URLS:
+                try:
+                    resp = ip_page.goto(url, wait_until="networkidle", timeout=10000)
+                    if resp and resp.ok:
+                        text = ip_page.text_content("body") or ""
+                        ip = extractor(text.strip())
+                        if ip:
+                            self.log(f"当前出口 IP：{ip}（代理：{self.proxy or '直连'}）")
+                            return
+                except Exception:
+                    continue
+            self.log(f"出口 IP 查询失败，代理配置：{self.proxy or '直连'}")
+        except Exception as e:
+            self.log(f"出口 IP 查询异常（不影响注册）：{e}")
+        finally:
+            if ip_page:
+                try:
+                    ip_page.close()
+                except Exception:
+                    pass
 
     def _close_browser(self):
         if self.context:

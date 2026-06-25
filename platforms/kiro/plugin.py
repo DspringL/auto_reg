@@ -34,6 +34,8 @@ class KiroPlatform(BasePlatform):
         log_fn = getattr(self, '_log_fn', print)
         reg.log = lambda msg: log_fn(msg)
 
+        log_fn(f"代理配置：{proxy or '直连（无代理）'}")
+
         otp_timeout = int(self.config.extra.get("otp_timeout", 300))
 
         if semi_auto:
