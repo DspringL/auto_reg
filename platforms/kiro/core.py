@@ -830,32 +830,62 @@ class KiroRegister:
             return
 
         try:
+            all_cookies = self.context.cookies()
             cookie_map = {
                 c.get("name", ""): c.get("value", "")
-                for c in self.context.cookies()
-                if c.get("domain", "").endswith("app.kiro.dev")
+                for c in all_cookies
+                if c.get("domain", "").endswith("kiro.dev")
+                or "kiro" in c.get("domain", "")
             }
+            kiro_cookie_keys = list(cookie_map.keys())
+            if kiro_cookie_keys:
+                self.log(f"Kiro cookies: {kiro_cookie_keys}")
             if cookie_map.get("AccessToken"):
                 self._captured_tokens["webAccessToken"] = cookie_map["AccessToken"]
             if cookie_map.get("SessionToken"):
                 self._captured_tokens["sessionToken"] = cookie_map["SessionToken"]
+            # 兜底：任何名字含 accesstoken 的 cookie
+            if not self._captured_tokens.get("webAccessToken"):
+                for k, v in cookie_map.items():
+                    if "accesstoken" in k.lower() and v:
+                        self._captured_tokens["webAccessToken"] = v
+                        break
         except Exception:
             pass
 
         if not self._captured_tokens.get("webAccessToken"):
             try:
-                ls = page.evaluate("() => JSON.stringify(window.localStorage)")
+                ls_raw = page.evaluate("() => JSON.stringify(window.localStorage)")
+                ls_data = json.loads(ls_raw)
+                # 记录 localStorage 所有 key，方便调试
+                ls_keys = list(ls_data.keys())
+                self.log(f"localStorage keys: {ls_keys[:30]}")
+                # 先尝试通用提取
                 self._captured_tokens.update(
-                    self._extract_tokens_from_object(json.loads(ls))
+                    self._extract_tokens_from_object(ls_data)
                 )
+                # 再尝试 Cognito 格式：CognitoIdentityServiceProvider.<clientId>.<username>.accessToken
+                for key, value in ls_data.items():
+                    if not isinstance(value, str) or not value:
+                        continue
+                    key_lower = key.lower()
+                    if "accesstoken" in key_lower and "cognito" in key_lower:
+                        self._captured_tokens.setdefault("webAccessToken", value)
+                    elif "refreshtoken" in key_lower and "cognito" in key_lower:
+                        self._captured_tokens.setdefault("refreshToken", value)
+                    elif "idtoken" in key_lower and "cognito" in key_lower:
+                        self._captured_tokens.setdefault("sessionToken", value)
+                    elif key == "accessToken" or key == "access_token":
+                        self._captured_tokens.setdefault("webAccessToken", value)
+                # accessToken -> webAccessToken 兜底
                 if self._captured_tokens.get(
                     "accessToken"
                 ) and not self._captured_tokens.get("webAccessToken"):
                     self._captured_tokens["webAccessToken"] = self._captured_tokens[
                         "accessToken"
                     ]
-            except Exception:
-                pass
+            except Exception as e:
+                self.log(f"读取 localStorage 失败：{e}")
 
         if not self._captured_tokens.get("sessionToken"):
             try:
@@ -1259,32 +1289,95 @@ class KiroRegister:
 
             # 6. 等待返回 Kiro 拿 Token
             self.log("等待回到 Kiro...")
-            # 优先等 networkidle（页面 XHR 全部结束，token 已写入 localStorage）
-            # 如果已在 kiro.dev 跳过 URL 轮询，直接等加载完成
-            if "kiro.dev" not in page.url:
+            # 用 expect_page / wait_for_url 等非阻塞方式检测
+            # 而不是在循环里同步读 page.url（会因 navigation 阻塞每次迭代）
+            kiro_page = None
+            timeout_ms = self._timeout_ms(30000)
+
+            # 先试 context.wait_for_event("page") 捕捉新 tab
+            # 同时也监听当前 page 跳转到 kiro.dev
+            import threading
+
+            def _find_kiro_page():
+                """在所有现有 tab 里找 kiro.dev，不阻塞。"""
+                for p in self.context.pages:
+                    try:
+                        url = p.url
+                        if url and "kiro.dev" in url:
+                            return p
+                    except Exception:
+                        pass
+                return None
+
+            # 先检查现有 tab（可能已经跳过去了）
+            kiro_page = _find_kiro_page()
+
+            if not kiro_page:
+                # 等待当前 page 导航到 kiro.dev（非阻塞 wait_for_url）
                 try:
-                    self._wait_for_url_interruptible(
-                        page, re.compile(r"kiro\.dev"), timeout_ms=30000
-                    )
-                except TimeoutError:
+                    with page.expect_navigation(
+                        url=re.compile(r"kiro\.dev"),
+                        timeout=timeout_ms,
+                        wait_until="domcontentloaded",
+                    ):
+                        pass  # navigation 已在进行中，这里只是等它完成
+                    kiro_page = page
+                    self.log(f"当前 page 已导航到 {page.url}")
+                except Exception:
                     pass
 
+            if not kiro_page:
+                # 最后轮询一次所有 tab（新 tab 场景）
+                deadline = time.time() + 5
+                while time.time() < deadline:
+                    kiro_page = _find_kiro_page()
+                    if kiro_page:
+                        break
+                    time.sleep(0.3)
+
+            if not kiro_page:
+                kiro_page = page  # 兜底，交给后续 debug 分支处理
+
+            page = kiro_page
+            self.log(f"Kiro tab URL: {page.url}，共 {len(self.context.pages)} 个 tab")
+
+            # 等待页面初始化完成
             if "kiro.dev" in page.url:
                 try:
-                    page.wait_for_load_state("networkidle", timeout=self._timeout_ms(10000))
-                except TimeoutError:
+                    page.wait_for_load_state("domcontentloaded", timeout=self._timeout_ms(8000))
+                except Exception:
                     pass
-                self.log(f"已到达 Kiro（{page.url}），等待页面初始化...")
-                self._human_sleep(2.0, 3.5)
+                self._human_sleep(1.5, 2.5)
             else:
-                self._human_sleep(3.0, 5.8)
+                self._human_sleep(2.0, 3.5)
             self._check_stop()
-            if "kiro.dev" not in page.url:
+            current_url = ""
+            try:
+                current_url = page.url
+            except Exception:
+                pass
+            self.log(f"准备抓取 token，当前 URL: {current_url}")
+
+            if "kiro.dev" not in current_url:
+                # URL 不对，但仍然尝试在所有 tab 里找
+                for p in self.context.pages:
+                    try:
+                        if "kiro.dev" in p.url:
+                            page = p
+                            current_url = p.url
+                            self.log(f"重新定位 Kiro tab: {current_url}")
+                            break
+                    except Exception:
+                        pass
+
+            if "kiro.dev" not in current_url:
                 err_text = ""
-                if page.locator(".awsui-alert-content").count() > 0:
-                    err_text = page.locator(
-                        ".awsui-alert-content").text_content()
-                self.log(f"未回到 Kiro，当前 URL: {page.url}")
+                try:
+                    if page.locator(".awsui-alert-content").count() > 0:
+                        err_text = page.locator(".awsui-alert-content").text_content()
+                except Exception:
+                    pass
+                self.log(f"未回到 Kiro，当前 URL: {current_url}")
                 try:
                     self.log(f"当前页面标题: {page.title()}")
                 except Exception:
@@ -1309,6 +1402,16 @@ class KiroRegister:
             self._capture_kiro_web_tokens(page)
 
             # 为了后续刷新等，必须有 token
+            # 若网络拦截未抓到（时机错过），主动触发一次 Kiro API 让拦截器补抓
+            if not self._captured_tokens.get("webAccessToken"):
+                self.log("网络拦截未抓到 token，尝试主动触发页面刷新重抓...")
+                try:
+                    page.reload(wait_until="domcontentloaded", timeout=self._timeout_ms(15000))
+                    self._human_sleep(1.5, 2.5)
+                    self._capture_kiro_web_tokens(page)
+                except Exception as reload_err:
+                    self.log(f"页面刷新失败：{reload_err}")
+
             if not self._captured_tokens.get("webAccessToken"):
                 self.log(f"当前 URL: {page.url}")
                 try:

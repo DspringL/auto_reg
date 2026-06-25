@@ -140,15 +140,19 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
     try:
         PlatformCls = get(req.platform)
 
-        def _build_mailbox(proxy: Optional[str]):
+        def _build_mailbox(proxy: Optional[str] = None):
             from core.config_store import config_store
+            from core.proxy_providers.fallback_url import _get_proxy_url
             merged_extra = config_store.get_all().copy()
             merged_extra.update(
                 {k: v for k, v in req.extra.items() if v is not None and v != ""})
+            # 邮箱 API 只走本地出口代理（PROXY_URL），不走动态代理商（神龙等）
+            # 动态代理商的 IP 仅用于浏览器注册，不适合 API 调用
+            mail_proxy = _get_proxy_url() or None
             return create_mailbox(
                 provider=merged_extra.get("mail_provider", "laoudo"),
                 extra=merged_extra,
-                proxy=proxy,
+                proxy=mail_proxy,
             )
 
         def _do_one(i: int):
@@ -207,7 +211,7 @@ def _run_register(task_id: str, req: RegisterTaskRequest):
                     proxy=_proxy,
                     extra=merged_extra,
                 )
-                _mailbox = _build_mailbox(_proxy)
+                _mailbox = _build_mailbox()
                 _platform = PlatformCls(config=_config, mailbox=_mailbox)
                 _platform._log_fn = lambda msg: _log(task_id, msg)
                 _platform._task_id = task_id

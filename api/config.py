@@ -96,6 +96,8 @@ CONFIG_KEYS = [
     # 神龙海外住宅代理
     "shenlong_enabled",
     "shenlong_api_key",
+    "shenlong_username",
+    "shenlong_password",
     "shenlong_country",
     "shenlong_protocol",
     "shenlong_fetch_count",

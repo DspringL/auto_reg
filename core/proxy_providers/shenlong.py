@@ -50,8 +50,19 @@ def _cfg(key: str, default: str = "") -> str:
             return v
     except Exception:
         pass
-    import os
-    return os.environ.get(key, default)
+    # 直接读环境变量
+    v = os.environ.get(key, "")
+    if v:
+        return v
+    # 回退到直接解析 .env 文件（应用未用 load_dotenv 时）
+    try:
+        from core.config_store import _get_env_fallback_value
+        v = _get_env_fallback_value(key)
+        if v:
+            return v
+    except Exception:
+        pass
+    return default
 
 
 @dataclass
@@ -98,7 +109,13 @@ class ShenlongProvider(ProxyProvider):
         protocol = _cfg("SHENLONG_PROTOCOL", "http").lower()
         line = random.choice(lines)
         host, port_str = line.rsplit(":", 1)
-        url = f"{protocol}://{host}:{port_str}"
+        # 支持用户名密码认证：SHENLONG_USERNAME / SHENLONG_PASSWORD
+        username = _cfg("SHENLONG_USERNAME", "")
+        password = _cfg("SHENLONG_PASSWORD", "")
+        if username and password:
+            url = f"{protocol}://{username}:{password}@{host}:{port_str}"
+        else:
+            url = f"{protocol}://{host}:{port_str}"
         logger.info("[shenlong] 选取代理 %s", url)
         return url
 
