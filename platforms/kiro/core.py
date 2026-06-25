@@ -171,7 +171,7 @@ class _StopRequested(RuntimeError):
 
 
 class KiroRegister:
-    def __init__(self, proxy=None, tag="KIRO", headless=False, slow_mode=False):
+    def __init__(self, proxy=None, tag="KIRO", headless=False, slow_mode=False, slow_multiplier=1):
         self.proxy = proxy
         self.tag = tag
         self.headless = headless
@@ -179,8 +179,9 @@ class KiroRegister:
         self.pw = None
         self.browser = None
         self.context = None
-        # 慢速模式：所有超时时间 ×2，适用于网络延迟较高的场景
+        # 慢速模式：所有超时时间 × slow_multiplier，适用于网络延迟较高的场景
         self.slow_mode = slow_mode
+        self.slow_multiplier = max(1, int(slow_multiplier)) if slow_multiplier else (2 if slow_mode else 1)
         # 停止钩子：外部传入一个返回 bool 的函数，返回 True 表示已请求停止
         self._stop_fn = None
 
@@ -193,8 +194,8 @@ class KiroRegister:
         self._stop_fn = fn
 
     def _timeout_ms(self, base_ms: int) -> int:
-        """根据 slow_mode 返回实际超时时间（慢速模式下翻倍）。"""
-        return base_ms * 2 if self.slow_mode else base_ms
+        """根据 slow_multiplier 返回实际超时时间（慢速模式下按倍率延长）。"""
+        return base_ms * self.slow_multiplier
 
     def _check_stop(self):
         """检查是否被请求停止，是则抛出 _StopRequested。"""
@@ -295,6 +296,8 @@ class KiroRegister:
         self.context.on("response", self._on_response)
 
         # 打印实际出口 IP（通过浏览器代理发起请求，结果最准确）
+        slow_label = f"（慢速 {self.slow_multiplier}x）" if self.slow_multiplier > 1 else ""
+        self.log(f"浏览器已就绪{slow_label}，开始查询出口 IP ...")
         self._log_exit_ip()
 
     def _is_watched_url(self, url: str) -> bool:

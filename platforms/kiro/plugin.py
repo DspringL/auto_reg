@@ -30,13 +30,21 @@ class KiroPlatform(BasePlatform):
         )
         headless = default_executor != "headed"
 
-        slow_mode = str(self.config.extra.get("kiro_slow_mode", "")).strip().lower() in ("1", "true", "yes")
+        slow_multiplier = 1
+        try:
+            raw = str(self.config.extra.get("kiro_slow_mode_multiplier", "1")).strip()
+            v = int(raw)
+            if v >= 2:
+                slow_multiplier = v
+        except (ValueError, TypeError):
+            pass
 
-        reg = KiroRegister(proxy=proxy, tag="KIRO", headless=headless, slow_mode=slow_mode)
+        reg = KiroRegister(proxy=proxy, tag="KIRO", headless=headless, slow_mode=slow_multiplier > 1, slow_multiplier=slow_multiplier)
         log_fn = getattr(self, '_log_fn', print)
         reg.log = lambda msg: log_fn(msg)
 
-        log_fn(f"代理配置：{proxy or '直连（无代理）'}{'（慢速模式）' if slow_mode else ''}")
+        slow_label = f"（慢速 {slow_multiplier}x）" if slow_multiplier > 1 else ""
+        log_fn(f"代理配置：{proxy or '直连（无代理）'}{slow_label}")
 
         otp_timeout = int(self.config.extra.get("otp_timeout", 300))
 

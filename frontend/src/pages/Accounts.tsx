@@ -684,7 +684,14 @@ export default function Accounts() {
         : registerExtra
 
       const isSemiAuto = currentPlatform === 'kiro' && semiAuto
-      const finalExtra = isSemiAuto ? { ...adaptedRegisterExtra, semi_auto: '1' } : adaptedRegisterExtra
+      const slowMultiplier = currentPlatform === 'kiro' ? (values.kiro_slow_mode_multiplier ?? 1) : 1
+      const kiroExtra = {
+        ...(isSemiAuto ? { semi_auto: '1' } : {}),
+        ...(slowMultiplier > 1 ? { kiro_slow_mode_multiplier: String(slowMultiplier) } : {}),
+      }
+      const finalExtra = Object.keys(kiroExtra).length > 0
+        ? { ...adaptedRegisterExtra, ...kiroExtra }
+        : adaptedRegisterExtra
 
       const res = await apiFetch('/tasks/register', {
         method: 'POST',
@@ -1280,6 +1287,21 @@ export default function Accounts() {
                     <Input placeholder="your@email.com" />
                   </Form.Item>
                 )}
+                <Form.Item
+                  name="kiro_slow_mode_multiplier"
+                  label="慢速模式"
+                  initialValue={1}
+                  extra="网络延迟较高时开启，所有等待超时按指定倍率延长"
+                >
+                  <Select
+                    options={[
+                      { value: 1, label: '关闭（默认）' },
+                      { value: 2, label: '2x 慢速' },
+                      { value: 3, label: '3x 慢速' },
+                      { value: 4, label: '4x 慢速' },
+                    ]}
+                  />
+                </Form.Item>
               </>
             )}
             <Form.Item>

@@ -88,7 +88,6 @@ CONFIG_KEYS = [
     "grok2api_quota",
     "kiro_manager_path",
     "kiro_manager_exe",
-    "kiro_slow_mode",
     # ── 代理配置 ──────────────────────────────────────────────────────────
     # 本地出口代理（调用动态代理 API 的境外网络出口）
     "local_outbound_proxy",
