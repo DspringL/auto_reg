@@ -43,6 +43,16 @@ class KiroPlatform(BasePlatform):
         log_fn = getattr(self, '_log_fn', print)
         reg.log = lambda msg: log_fn(msg)
 
+        # 把 task_control 注入 KiroRegister：
+        #   1. 让 _stop_fn 走 task_control.is_stop_requested()（统一入口）
+        #   2. _init_browser() 会向 task_control 注册 _force_close_browser 回调，
+        #      stop_task API 调用 task_control.request_stop() 时会在后台线程
+        #      立即关闭 browser，使所有阻塞的 Playwright 调用立即抛出异常
+        _task_control = getattr(self, '_task_control', None)
+        if _task_control is not None:
+            reg._task_control = _task_control
+            reg.set_stop_fn(_task_control.is_stop_requested)
+
         slow_label = f"（慢速 {slow_multiplier}x）" if slow_multiplier > 1 else ""
         log_fn(f"代理配置：{proxy or '直连（无代理）'}{slow_label}")
 

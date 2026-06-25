@@ -184,6 +184,11 @@ class KiroRegister:
         self.slow_multiplier = max(1, int(slow_multiplier)) if slow_multiplier else (2 if slow_mode else 1)
         # 停止钩子：外部传入一个返回 bool 的函数，返回 True 表示已请求停止
         self._stop_fn = None
+        # 已绑定的 RegisterTaskControl（用于注销强制停止回调）
+        self._task_control = None
+        # 保护 _close_browser 不被并发调用两次
+        self._browser_close_lock = threading.Lock()
+        self._browser_closed = False
 
         # 保存捕获到的 Token API 响应
         self._captured_tokens = {}
@@ -294,6 +299,12 @@ class KiroRegister:
         # 拦截 Kiro 登录成功相关的请求/响应，提取 Token
         self.context.on("request", self._on_request)
         self.context.on("response", self._on_response)
+
+        # 注册强制停止回调：stop 信号触发后，在后台线程关闭 browser，
+        # 使所有阻塞的 Playwright 调用（page.goto / wait_for 等）立即抛出异常，
+        # 而不是等到 timeout 才感知停止信号。
+        if self._task_control is not None:
+            self._task_control.register_force_stop_callback(self._force_close_browser)
 
         # 打印实际出口 IP（通过浏览器代理发起请求，结果最准确）
         slow_label = f"（慢速 {self.slow_multiplier}x）" if self.slow_multiplier > 1 else ""
@@ -454,13 +465,44 @@ class KiroRegister:
                 except Exception:
                     pass
 
+    def _force_close_browser(self):
+        """
+        强制停止回调：由 RegisterTaskControl 在后台线程调用。
+        关闭 Playwright browser，使所有阻塞的 page.goto / wait_for 等调用
+        立即抛出 TargetClosedError，从而让注册线程从阻塞中醒来并走到 finally。
+        """
+        self.log_fn(f"[{self.tag}] [STOP] 收到强制停止信号，正在关闭浏览器...")
+        self._close_browser()
+
     def _close_browser(self):
-        if self.context:
-            self.context.close()
-        if self.browser:
-            self.browser.close()
-        if self.pw:
-            self.pw.stop()
+        """幂等关闭浏览器资源，多次调用安全。"""
+        with self._browser_close_lock:
+            if self._browser_closed:
+                return
+            self._browser_closed = True
+
+        # 注销强制停止回调，防止 browser 已关闭后再次被调用
+        if self._task_control is not None:
+            try:
+                self._task_control.unregister_force_stop_callback(self._force_close_browser)
+            except Exception:
+                pass
+
+        try:
+            if self.context:
+                self.context.close()
+        except Exception:
+            pass
+        try:
+            if self.browser:
+                self.browser.close()
+        except Exception:
+            pass
+        try:
+            if self.pw:
+                self.pw.stop()
+        except Exception:
+            pass
 
     def _accept_cookie_banner_if_present(self, page: Page):
         try:

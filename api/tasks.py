@@ -603,12 +603,15 @@ def stop_task(task_id: str):
         if task.get("status") != "running":
             raise HTTPException(400, "任务未在运行")
         task.setdefault("control", {})["stop_requested"] = True
-        # 同时通知协作式控制器（若已绑定），让 mailbox/platform 的 checkpoint 能立即感知
+        # 协作式控制器（若已绑定）：
+        #   1. 设置 stop_requested 标志，让 checkpoint 抛出 StopTaskRequested
+        #   2. 触发所有注册的 force_stop_callback（后台线程关闭 Playwright browser）
+        #      使阻塞调用（page.goto / wait_for）立即抛出异常而非等到 timeout
         _tc = task.get("_task_control")
         if _tc is not None:
             _tc.request_stop()
-        _log(task_id, "[STOP] 用户请求停止任务，等待当前线程完成...")
-    return {"ok": True, "message": "已发送停止请求"}
+        _log(task_id, "[STOP] 用户请求停止任务，正在中断阻塞调用...")
+    return {"ok": True, "message": "已发送停止请求（强制中断模式）"}
 
 
 class OtpSubmitRequest(BaseModel):

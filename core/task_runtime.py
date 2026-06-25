@@ -57,7 +57,21 @@ class AttemptResult:
 
 
 class RegisterTaskControl:
-    """协作式任务控制器：支持停止整个任务、跳过一个当前账号。"""
+    """
+    协作式任务控制器：支持停止整个任务、跳过一个当前账号。
+
+    强制停止扩展
+    ──────────
+    除了设置 stop_requested 标志（协作式），还支持注册「强制停止回调」。
+    调用 request_stop() 时会在独立守护线程中依次调用所有回调，从而可以
+    从外部中断正在阻塞的资源（如 Playwright browser.close()），让阻塞
+    的 Playwright 调用立即抛出异常，而不是等到 timeout 才感知停止信号。
+
+    注册方式::
+        tc.register_force_stop_callback(my_fn)   # my_fn() 无参，幂等
+
+    回调在独立线程中调用，不会阻塞 request_stop() 的调用方。
+    """
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -66,10 +80,37 @@ class RegisterTaskControl:
         self._next_attempt_id = 1
         self._active_attempt_ids: set[int] = set()
         self._skip_active_attempt_ids: set[int] = set()
+        # 强制停止回调列表，每个元素均为无参可调用对象
+        self._force_stop_callbacks: list = []
+
+    def register_force_stop_callback(self, fn) -> None:
+        """注册一个强制停止回调，request_stop() 触发后会在后台线程调用它。"""
+        with self._lock:
+            self._force_stop_callbacks.append(fn)
+
+    def unregister_force_stop_callback(self, fn) -> None:
+        """注销强制停止回调（资源释放后调用，防止回调操作已销毁的对象）。"""
+        with self._lock:
+            try:
+                self._force_stop_callbacks.remove(fn)
+            except ValueError:
+                pass
 
     def request_stop(self) -> None:
         with self._lock:
             self._stop_requested = True
+            callbacks = list(self._force_stop_callbacks)
+
+        # 在独立守护线程中调用所有回调，不阻塞调用方
+        if callbacks:
+            def _run_callbacks():
+                for cb in callbacks:
+                    try:
+                        cb()
+                    except Exception:
+                        pass
+            t = threading.Thread(target=_run_callbacks, daemon=True)
+            t.start()
 
     def request_skip_current(self) -> None:
         with self._lock:
