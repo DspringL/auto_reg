@@ -591,7 +591,9 @@ def get_task(task_id: str):
     with _tasks_lock:
         if task_id not in _tasks:
             raise HTTPException(404, "任务不存在")
-        return _tasks[task_id]
+        task = _tasks[task_id]
+        # 过滤掉不可序列化的内部字段（_task_control 等）
+        return {k: v for k, v in task.items() if not k.startswith("_")}
 
 
 @router.post("/{task_id}/stop")
@@ -634,7 +636,11 @@ def submit_otp(task_id: str, body: OtpSubmitRequest):
 @router.get("")
 def list_tasks():
     with _tasks_lock:
-        return list(_tasks.values())
+        # 过滤掉不可序列化的内部字段（_task_control / _task_runtime 等）
+        return [
+            {k: v for k, v in task.items() if not k.startswith("_")}
+            for task in _tasks.values()
+        ]
 
 
 # 定时任务管理 API - 更新任务
