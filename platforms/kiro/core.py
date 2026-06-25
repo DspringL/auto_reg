@@ -1259,11 +1259,25 @@ class KiroRegister:
 
             # 6. 等待返回 Kiro 拿 Token
             self.log("等待回到 Kiro...")
-            try:
-                self._wait_for_url_interruptible(page, re.compile(r"kiro\.dev"), timeout_ms=30000)
+            # 优先等 networkidle（页面 XHR 全部结束，token 已写入 localStorage）
+            # 如果已在 kiro.dev 跳过 URL 轮询，直接等加载完成
+            if "kiro.dev" not in page.url:
+                try:
+                    self._wait_for_url_interruptible(
+                        page, re.compile(r"kiro\.dev"), timeout_ms=30000
+                    )
+                except TimeoutError:
+                    pass
+
+            if "kiro.dev" in page.url:
+                try:
+                    page.wait_for_load_state("networkidle", timeout=self._timeout_ms(10000))
+                except TimeoutError:
+                    pass
+                self.log(f"已到达 Kiro（{page.url}），等待页面初始化...")
+                self._human_sleep(2.0, 3.5)
+            else:
                 self._human_sleep(3.0, 5.8)
-            except TimeoutError:
-                pass
             self._check_stop()
             if "kiro.dev" not in page.url:
                 err_text = ""
