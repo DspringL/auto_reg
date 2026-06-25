@@ -773,13 +773,18 @@ class KiroRegister:
                 field.clear()
             except Exception:
                 pass
-            for _ in range(2):
-                field.fill(password)
-                if field.input_value() == password:
-                    break
+            # 先清空，再模拟人工逐字输入
+            try:
+                field.fill("")
+            except Exception:
+                pass
+            field.type(password, delay=random.randint(45, 95))
+            # 验证写入是否成功，失败则回退到 fill
+            if field.input_value() != password:
                 field.click()
                 page.keyboard.press("Control+A")
                 page.keyboard.press("Backspace")
+                field.fill(password)
             if field.input_value() != password:
                 raise RuntimeError("密码输入框写入失败")
 
@@ -944,7 +949,7 @@ class KiroRegister:
                         password_input.fill("")
                     except Exception:
                         pass
-                    password_input.fill(pwd)
+                    password_input.type(pwd, delay=random.randint(45, 95))
                     self._click_primary_button(page)
                     self._human_sleep(0.7, 1.4)
         except Exception:
@@ -1004,8 +1009,19 @@ class KiroRegister:
 
             started = time.time()
             while time.time() - started < 120:
+                # 优先检查 callback 是否已收到，立即退出
                 if callback_server._event.is_set():
                     break
+                # auth_page 已经跳到了 callback URL，说明授权已完成，等一下让 server 处理完
+                try:
+                    current_url = auth_page.url
+                    if "127.0.0.1" in current_url and "oauth/callback" in current_url:
+                        # callback 已触发，等 event 最多 2 秒
+                        callback_server._event.wait(2)
+                        break
+                except Exception:
+                    pass
+
                 if otp_callback and not desktop_otp_used:
                     try:
                         otp_input = auth_page.locator(
@@ -1016,17 +1032,17 @@ class KiroRegister:
                             otp_code = otp_callback()
                             if not otp_code:
                                 raise RuntimeError("未获取到桌面授权验证码")
-                            otp_input.fill(str(otp_code))
+                            self._type_like_human(auth_page, otp_input, str(otp_code))
                             self._click_primary_button(auth_page)
                             desktop_otp_used = True
-                            self._human_sleep(0.7, 1.5)
+                            time.sleep(random.uniform(0.7, 1.5))  # 内部检测间隔，不受慢速倍率影响
                             continue
                     except Exception as otp_error:
                         raise RuntimeError(
                             f"桌面授权验证码处理失败: {otp_error}"
                         ) from otp_error
                 self._handle_desktop_auth_page(auth_page, email=email, pwd=pwd)
-                self._human_sleep(0.6, 1.3)
+                time.sleep(random.uniform(0.6, 1.0))  # 内部检测间隔，不受慢速倍率影响
 
             callback = callback_server.wait(timeout=5)
             desktop_token = self._exchange_desktop_token(
@@ -1110,6 +1126,9 @@ class KiroRegister:
             page.goto(KIRO_SIGNIN_URL, wait_until="domcontentloaded", timeout=self._timeout_ms(30000))
             self._human_sleep(1.9, 3.4)
 
+            # Kiro 首页可能有 Cookie 横幅，先处理掉，避免遮挡按钮
+            self._accept_cookie_banner_if_present(page)
+
             # Debug: dump all buttons to log
             try:
                 btns = page.locator("button").all_text_contents()
@@ -1125,36 +1144,40 @@ class KiroRegister:
             elif page.locator('text="AWS Builder ID"').count() > 0:
                 page.locator('text="AWS Builder ID"').first.click()
 
-            self.log("等待跳转到 AWS SSO ...")
-            self._wait_for_url_interruptible(page, re.compile(r"signin\.aws"), timeout_ms=30000)
+            self.log("等待 AWS SSO 登录页加载 ...")
+            # 点击后直接等邮箱输入框出现（比等 URL 变化更可靠）
+            # AWS SSO 有时用 JS 动态渲染，URL 不变但表单已出现
+            try:
+                email_input = page.locator(
+                    'input[placeholder="username@example.com"], input[type="email"]'
+                ).first
+                email_input.wait_for(state="visible", timeout=self._timeout_ms(15000))
+                self.log("AWS SSO 登录页已就绪")
+            except TimeoutError:
+                # 邮箱框未出现，可能还在跳转中，再给最多 15 秒等 URL 变化
+                self.log("邮箱框未出现，尝试等待 URL 跳转 ...")
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=self._timeout_ms(10000))
+                except TimeoutError:
+                    pass
+                if "signin.aws" not in page.url:
+                    self._wait_for_url_interruptible(page, re.compile(r"signin\.aws"), timeout_ms=15000)
+            
             self._check_stop()
             self._accept_cookie_banner_if_present(page)
             self._solve_captcha_if_exists(page)
 
             # 1. 填写 Email
             self.log("1. 填写 Email...")
-            # Debug: 打印出现的所有 input 了解真实属性
-            try:
-                inputs_info = []
-                for field in page.locator("input").all():
-                    inputs_info.append(
-                        f"id={field.get_attribute('id')} type={field.get_attribute('type')} name={field.get_attribute('name')}"
-                    )
-                self.log(f"Page Inputs: {inputs_info}")
-            except Exception:
-                pass
-
-            self._check_stop()
+            # 上面 wait_for 已确认可见；若走了 URL 轮询兜底路径则再等一次
             email_input = page.locator(
                 'input[placeholder="username@example.com"], input[type="email"]'
             ).first
-            email_input.wait_for(state="visible", timeout=self._timeout_ms(15000))
+            email_input.wait_for(state="visible", timeout=self._timeout_ms(10000))
             self._check_stop()
-            self._type_like_human(
-                page,
-                'input[placeholder="username@example.com"], input[type="email"]',
-                email,
-            )
+            email_input.click()
+            email_input.fill("")
+            email_input.type(email, delay=random.randint(40, 90))
             self._click_primary_button(page)
             self._human_sleep(1.0, 3.0)
             self._solve_captcha_if_exists(page)
