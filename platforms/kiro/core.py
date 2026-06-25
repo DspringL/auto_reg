@@ -171,7 +171,7 @@ class _StopRequested(RuntimeError):
 
 
 class KiroRegister:
-    def __init__(self, proxy=None, tag="KIRO", headless=False):
+    def __init__(self, proxy=None, tag="KIRO", headless=False, slow_mode=False):
         self.proxy = proxy
         self.tag = tag
         self.headless = headless
@@ -179,6 +179,8 @@ class KiroRegister:
         self.pw = None
         self.browser = None
         self.context = None
+        # 慢速模式：所有超时时间 ×2，适用于网络延迟较高的场景
+        self.slow_mode = slow_mode
         # 停止钩子：外部传入一个返回 bool 的函数，返回 True 表示已请求停止
         self._stop_fn = None
 
@@ -189,6 +191,10 @@ class KiroRegister:
     def set_stop_fn(self, fn):
         """注入停止检查函数，fn() 返回 True 时中止流程。"""
         self._stop_fn = fn
+
+    def _timeout_ms(self, base_ms: int) -> int:
+        """根据 slow_mode 返回实际超时时间（慢速模式下翻倍）。"""
+        return base_ms * 2 if self.slow_mode else base_ms
 
     def _check_stop(self):
         """检查是否被请求停止，是则抛出 _StopRequested。"""
@@ -602,7 +608,7 @@ class KiroRegister:
 
     def _wait_for_url_interruptible(self, page: Page, url_pattern, timeout_ms: int = 30000):
         """分段轮询等待 URL 变化，每 200ms 检查一次停止标志。"""
-        deadline = time.time() + timeout_ms / 1000
+        deadline = time.time() + self._timeout_ms(timeout_ms) / 1000
         while time.time() < deadline:
             self._check_stop()
             try:
@@ -621,7 +627,7 @@ class KiroRegister:
     def _wait_for_password_step(
         self, page: Page, timeout_ms: int = 15000
     ) -> Tuple[bool, str]:
-        deadline = time.time() + (timeout_ms / 1000)
+        deadline = time.time() + (self._timeout_ms(timeout_ms) / 1000)
         password_input = page.locator('input[type="password"]')
         error_patterns = [
             re.compile(r"code didn't work", re.I),
@@ -649,7 +655,7 @@ class KiroRegister:
     def _wait_for_post_email_step(
         self, page: Page, timeout_ms: int = 30000
     ) -> Tuple[str, Optional[Locator], str]:
-        deadline = time.time() + (timeout_ms / 1000)
+        deadline = time.time() + (self._timeout_ms(timeout_ms) / 1000)
         error_patterns = [
             re.compile(r"error processing your request", re.I),
             re.compile(r"couldn't complete your request", re.I),
@@ -684,7 +690,7 @@ class KiroRegister:
     def _wait_for_otp_step(
         self, page: Page, timeout_ms: int = 18000
     ) -> Tuple[bool, str, Optional[Locator]]:
-        deadline = time.time() + (timeout_ms / 1000)
+        deadline = time.time() + (self._timeout_ms(timeout_ms) / 1000)
         error_patterns = [
             re.compile(r"error processing your request", re.I),
             re.compile(r"couldn't complete your request", re.I),
@@ -713,8 +719,8 @@ class KiroRegister:
         password_field = page.get_by_label("Password", exact=True)
         confirm_field = page.get_by_label("Confirm password", exact=True)
 
-        password_field.first.wait_for(state="visible", timeout=10000)
-        confirm_field.first.wait_for(state="visible", timeout=10000)
+        password_field.first.wait_for(state="visible", timeout=self._timeout_ms(10000))
+        confirm_field.first.wait_for(state="visible", timeout=self._timeout_ms(10000))
 
         for field in (password_field.first, confirm_field.first):
             field.click()
@@ -1056,7 +1062,7 @@ class KiroRegister:
 
             self._check_stop()
             self.log("加载 Kiro Login ...")
-            page.goto(KIRO_SIGNIN_URL, wait_until="domcontentloaded", timeout=30000)
+            page.goto(KIRO_SIGNIN_URL, wait_until="domcontentloaded", timeout=self._timeout_ms(30000))
             self._human_sleep(1.9, 3.4)
 
             # Debug: dump all buttons to log
@@ -1097,7 +1103,7 @@ class KiroRegister:
             email_input = page.locator(
                 'input[placeholder="username@example.com"], input[type="email"]'
             ).first
-            email_input.wait_for(state="visible", timeout=15000)
+            email_input.wait_for(state="visible", timeout=self._timeout_ms(15000))
             self._check_stop()
             self._type_like_human(
                 page,
@@ -1190,7 +1196,6 @@ class KiroRegister:
                 self._human_sleep(3.0, 5.8)
             except TimeoutError:
                 pass
-
             self._check_stop()
             if "kiro.dev" not in page.url:
                 err_text = ""
