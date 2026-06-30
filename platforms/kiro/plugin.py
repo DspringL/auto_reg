@@ -53,6 +53,11 @@ class KiroPlatform(BasePlatform):
             reg._task_control = _task_control
             reg.set_stop_fn(_task_control.is_stop_requested)
 
+        # 注入 task_id，供 _wait_for_manual_callback 读取 callback_slots
+        _task_id = getattr(self, '_task_id', None)
+        if _task_id is not None:
+            reg._task_id = _task_id
+
         slow_label = f"（慢速 {slow_multiplier}x）" if slow_multiplier > 1 else ""
         log_fn(f"代理配置：{proxy or '直连（无代理）'}{slow_label}")
 

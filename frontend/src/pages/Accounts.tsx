@@ -496,6 +496,10 @@ export default function Accounts() {
   const [registerModalOpen, setRegisterModalOpen] = useState(false)
   const [addModalOpen, setAddModalOpen] = useState(false)
   const [importModalOpen, setImportModalOpen] = useState(false)
+  // Kiro callback URL 转换弹窗
+  const [callbackImportOpen, setCallbackImportOpen] = useState(false)
+  const [callbackImportUrl, setCallbackImportUrl] = useState('')
+  const [callbackImportLoading, setCallbackImportLoading] = useState(false)
   const [detailModalOpen, setDetailModalOpen] = useState(false)
   const [currentAccount, setCurrentAccount] = useState<any>(null)
 
@@ -620,6 +624,30 @@ export default function Accounts() {
       message.error(`导入失败: ${e.message}`)
     } finally {
       setImportLoading(false)
+    }
+  }
+
+  const handleCallbackImport = async () => {
+    const url = callbackImportUrl.trim()
+    if (!url) return
+    if (!url.includes('oauth/callback') || !url.includes('code=')) {
+      message.error('请粘贴完整的 callback URL，需包含 oauth/callback 和 code 参数')
+      return
+    }
+    setCallbackImportLoading(true)
+    try {
+      const res = await apiFetch('/kiro/complete-callback', {
+        method: 'POST',
+        body: JSON.stringify({ callback_url: url }),
+      })
+      message.success(`账号导入成功：${res.email || ''}`)
+      setCallbackImportOpen(false)
+      setCallbackImportUrl('')
+      load()
+    } catch (e: any) {
+      message.error(`导入失败：${e.message}`)
+    } finally {
+      setCallbackImportLoading(false)
     }
   }
 
@@ -1206,6 +1234,11 @@ export default function Accounts() {
           <Button icon={<UploadOutlined />} onClick={() => setImportModalOpen(true)}>导入</Button>
           <Button icon={<DownloadOutlined />} onClick={exportCsv} disabled={accounts.length === 0}>导出</Button>
           <Button icon={<PlusOutlined />} onClick={() => setAddModalOpen(true)}>新增</Button>
+          {currentPlatform === 'kiro' && (
+            <Button icon={<LinkOutlined />} onClick={() => { setCallbackImportOpen(true); setCallbackImportUrl('') }}>
+              Callback 导入
+            </Button>
+          )}
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setRegisterModalOpen(true)}>注册</Button>
           <Button icon={<ReloadOutlined spin={loading} />} onClick={load} />
         </Space>
@@ -1363,6 +1396,35 @@ export default function Accounts() {
           onChange={(e) => setImportText(e.target.value)}
           rows={8}
           style={{ fontFamily: 'monospace' }}
+        />
+      </Modal>
+
+      {/* Kiro callback URL 转换弹窗 */}
+      <Modal
+        title="从 Callback URL 导入 Kiro 账号"
+        open={callbackImportOpen}
+        onOk={handleCallbackImport}
+        onCancel={() => { setCallbackImportOpen(false); setCallbackImportUrl('') }}
+        okText="导入"
+        cancelText="取消"
+        confirmLoading={callbackImportLoading}
+        okButtonProps={{ disabled: !callbackImportUrl.trim() }}
+        width={600}
+        maskClosable={false}
+      >
+        <p style={{ marginBottom: 8, color: '#6b7280', fontSize: 13 }}>
+          将浏览器地址栏中的完整 callback URL 粘贴到下方，系统将自动解析并换取 Token。
+        </p>
+        <p style={{ marginBottom: 12, fontFamily: 'monospace', fontSize: 12, background: '#f3f4f6', padding: '6px 10px', borderRadius: 4, color: '#374151' }}>
+          示例：http://127.0.0.1:56889/oauth/callback?code=eyJ...&state=AAA...
+        </p>
+        <Input.TextArea
+          autoFocus
+          rows={3}
+          placeholder="粘贴完整 callback URL..."
+          value={callbackImportUrl}
+          onChange={(e) => setCallbackImportUrl(e.target.value)}
+          style={{ fontFamily: 'monospace', fontSize: 12 }}
         />
       </Modal>
 

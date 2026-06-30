@@ -793,6 +793,20 @@ class KiroRegister:
             "content-type": "application/json",
             "user-agent": "KiroIDE",
         }
+        # 桌面端 OIDC API 调用使用本地出口代理（LOCAL_OUTBOUND_PROXY），
+        # 不使用神龙等动态代理（神龙 IP 需要认证且只给浏览器用）
+        import os
+        outbound = (
+            os.environ.get("LOCAL_OUTBOUND_PROXY", "")
+            or os.environ.get("PROXY_URL", "")
+        ).strip() or None
+        if not outbound:
+            try:
+                from core.proxy_providers.fallback_url import _get_proxy_url
+                outbound = _get_proxy_url() or None
+            except Exception:
+                pass
+
         if cffi_requests is not None:
             kwargs = {
                 "json": payload,
@@ -800,8 +814,8 @@ class KiroRegister:
                 "timeout": 30,
                 "impersonate": "chrome131",
             }
-            if self.proxy:
-                kwargs["proxies"] = build_requests_proxy_config(self.proxy)
+            if outbound:
+                kwargs["proxies"] = build_requests_proxy_config(outbound)
             response = cffi_requests.post(url, **kwargs)
             if response.status_code != 200:
                 raise RuntimeError(
@@ -811,6 +825,9 @@ class KiroRegister:
 
         data = json.dumps(payload).encode("utf-8")
         opener = build_opener()
+        if outbound:
+            from urllib.request import ProxyHandler
+            opener = build_opener(ProxyHandler({"http": outbound, "https": outbound}))
         request = Request(url, data=data, headers=headers, method="POST")
         with opener.open(request, timeout=30) as resp:
             body = resp.read().decode("utf-8")
@@ -1011,12 +1028,51 @@ class KiroRegister:
             .rstrip("=")
         )
 
-        callback_server = _DesktopAuthCallbackServer(expected_state=state)
-        callback_server.start()
+        # 用 Playwright 路由拦截替代本地 HTTP callback server。
+        # 原因：浏览器走代理时 127.0.0.1 请求会经过代理隧道，本地 server 收不到请求。
+        # 路由拦截在 Playwright 内部处理，完全绕开代理。
+        callback_result: dict = {}
+        callback_event = threading.Event()
+
+        def _handle_route(route, request):
+            try:
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(request.url)
+                params = parse_qs(parsed.query)
+                error = (params.get("error") or [None])[0]
+                code = (params.get("code") or [None])[0]
+                cb_state = (params.get("state") or [None])[0]
+                if error:
+                    callback_result["error"] = error
+                elif not code:
+                    callback_result["error"] = "callback 缺少 code"
+                elif cb_state != state:
+                    callback_result["error"] = f"state 不匹配: {cb_state}"
+                else:
+                    callback_result["code"] = code
+                    callback_result["state"] = cb_state
+            except Exception as e:
+                callback_result["error"] = str(e)
+            finally:
+                callback_event.set()
+                try:
+                    route.fulfill(
+                        status=200,
+                        content_type="text/html",
+                        body="<html><body><h3>Kiro desktop authentication completed.</h3></body></html>",
+                    )
+                except Exception:
+                    pass
+
+        # redirect_uri 固定用 127.0.0.1（无端口），与 OIDC client 注册时一致
+        redirect_uri = "http://127.0.0.1/oauth/callback"
+        # 拦截所有 127.0.0.1 的 oauth/callback 请求（Playwright glob，含任意端口）
+        CALLBACK_INTERCEPT_URL = "http://127.0.0.1**/oauth/callback**"
+        self.context.route(CALLBACK_INTERCEPT_URL, _handle_route)
+
         auth_page = None
         desktop_otp_used = False
         try:
-            redirect_uri = callback_server.redirect_uri
             authorize_url = (
                 f"https://oidc.{region}.amazonaws.com/authorize?"
                 + urlencode(
@@ -1039,18 +1095,9 @@ class KiroRegister:
 
             started = time.time()
             while time.time() - started < 120:
-                # 优先检查 callback 是否已收到，立即退出
-                if callback_server._event.is_set():
+                # 路由拦截已触发
+                if callback_event.is_set():
                     break
-                # auth_page 已经跳到了 callback URL，说明授权已完成，等一下让 server 处理完
-                try:
-                    current_url = auth_page.url
-                    if "127.0.0.1" in current_url and "oauth/callback" in current_url:
-                        # callback 已触发，等 event 最多 2 秒
-                        callback_server._event.wait(2)
-                        break
-                except Exception:
-                    pass
 
                 if otp_callback and not desktop_otp_used:
                     try:
@@ -1065,22 +1112,31 @@ class KiroRegister:
                             self._type_like_human(auth_page, otp_input, str(otp_code))
                             self._click_primary_button(auth_page)
                             desktop_otp_used = True
-                            time.sleep(random.uniform(0.7, 1.5))  # 内部检测间隔，不受慢速倍率影响
+                            time.sleep(random.uniform(0.7, 1.5))
                             continue
                     except Exception as otp_error:
                         raise RuntimeError(
                             f"桌面授权验证码处理失败: {otp_error}"
                         ) from otp_error
                 self._handle_desktop_auth_page(auth_page, email=email, pwd=pwd)
-                time.sleep(random.uniform(0.6, 1.0))  # 内部检测间隔，不受慢速倍率影响
+                time.sleep(random.uniform(0.6, 1.0))
 
-            callback = callback_server.wait(timeout=5)
+            # 等路由回调最多再等 5 秒
+            if not callback_event.wait(timeout=5):
+                raise TimeoutError("等待桌面授权回调超时")
+            elif "error" in callback_result:
+                raise RuntimeError(callback_result["error"])
+            else:
+                code = callback_result.get("code")
+                if not code:
+                    raise RuntimeError("桌面授权回调未返回 code")
+
             desktop_token = self._exchange_desktop_token(
                 region=region,
                 client_id=client_registration["clientId"],
                 client_secret=client_registration["clientSecret"],
                 redirect_uri=redirect_uri,
-                code=callback["code"],
+                code=code,
                 code_verifier=code_verifier,
             )
             self.log(
@@ -1095,12 +1151,15 @@ class KiroRegister:
                 "region": region,
             }
         finally:
+            try:
+                self.context.unroute(CALLBACK_INTERCEPT_URL, _handle_route)
+            except Exception:
+                pass
             if auth_page:
                 try:
                     auth_page.close()
                 except Exception:
                     pass
-            callback_server.close()
 
     def fetch_desktop_tokens(
         self, email: str, pwd: str, otp_callback=None
@@ -1470,13 +1529,25 @@ class KiroRegister:
                 self.log(f"⚠️ 桌面端 Builder ID Token 补抓失败: {desktop_error}")
 
             self.log(
-                f"最终 tokens: accessToken={'有' if self._captured_tokens.get('accessToken') else '无'}, refreshToken={'有' if self._captured_tokens.get('refreshToken') else '无'}, clientId={'有' if self._captured_tokens.get('clientId') else '无'}")
+                f"最终 tokens: "
+                f"accessToken={'有' if self._captured_tokens.get('accessToken') else '无'}, "
+                f"webAccessToken={'有' if self._captured_tokens.get('webAccessToken') else '无'}, "
+                f"refreshToken={'有' if self._captured_tokens.get('refreshToken') else '无'}, "
+                f"clientId={'有' if self._captured_tokens.get('clientId') else '无'}, "
+                f"sessionToken={'有' if self._captured_tokens.get('sessionToken') else '无'}"
+            )
+            final_access = (
+                self._captured_tokens.get("accessToken")
+                or self._captured_tokens.get("webAccessToken")
+                or ""
+            )
+            if not final_access:
+                return False, {"error": "注册完成但未能提取 AccessToken"}
             return True, {
                 "email": email,
                 "password": pwd,
                 "name": name,
-                "accessToken": self._captured_tokens.get("accessToken", "")
-                or self._captured_tokens.get("webAccessToken", ""),
+                "accessToken": final_access,
                 "refreshToken": self._captured_tokens.get("refreshToken", ""),
                 "clientId": self._captured_tokens.get("clientId", ""),
                 "clientSecret": self._captured_tokens.get("clientSecret", ""),
